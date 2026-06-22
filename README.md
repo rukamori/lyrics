@@ -9,7 +9,7 @@
   </p>
 
   <p align="center">
-    <img src="https://img.shields.io/github/v/release/ArchiveTuneApp/lyrics?style=for-the-badge&color=6366f1&labelColor=1e1e2e&logo=github" alt="Latest Version" />
+    <img src="https://img.shields.io/badge/Lyrics%20Sources-6-6366f1?style=for-the-badge&labelColor=1e1e2e" alt="6 Lyrics Sources" />
     <img src="https://img.shields.io/github/license/ArchiveTuneApp/lyrics?style=for-the-badge&color=6366f1&labelColor=1e1e2e" alt="License" />
     <img src="https://img.shields.io/badge/Language-Kotlin-7f52ff?style=for-the-badge&logo=kotlin&color=6366f1&labelColor=1e1e2e" alt="Kotlin" />
     <img src="https://img.shields.io/badge/Runtime-JVM-6366f1?style=for-the-badge&logo=openjdk&labelColor=1e1e2e" alt="JVM" />
