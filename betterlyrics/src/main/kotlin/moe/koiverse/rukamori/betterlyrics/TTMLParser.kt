@@ -45,23 +45,6 @@ object TTMLParser {
 
     private val whitespaceRegex = Regex("\\s+")
 
-    private fun isCjk(text: String): Boolean =
-        text.any { c ->
-            Character.UnicodeBlock.of(c) in
-                setOf(
-                    Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS,
-                    Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A,
-                    Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B,
-                    Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS,
-                    Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS_SUPPLEMENT,
-                    Character.UnicodeBlock.HIRAGANA,
-                    Character.UnicodeBlock.KATAKANA,
-                    Character.UnicodeBlock.HANGUL_SYLLABLES,
-                    Character.UnicodeBlock.HANGUL_JAMO,
-                    Character.UnicodeBlock.HANGUL_COMPATIBILITY_JAMO,
-                )
-        }
-
     fun parseTTML(ttml: String): List<ParsedLine> {
         val lines = mutableListOf<ParsedLine>()
 
@@ -362,7 +345,6 @@ object TTMLParser {
                                 lineText.append(wordText)
 
                                 if (hasExplicitTiming) {
-                                    val isSyllableContinuation = words.isNotEmpty() && !words.last().text.endsWith(" ")
                                     val rawWordStart = parseTime(wordBegin, timingContext)
                                     val rawWordEnd =
                                         if (wordEnd.isNotEmpty()) {
@@ -385,28 +367,15 @@ object TTMLParser {
                                             fallback = lineEndTime,
                                         ).coerceAtLeast(wordStartTime)
                                     val trimmedText = wordText.trim()
-                                    val newWord =
-                                        ParsedWord(
-                                            text = trimmedText,
-                                            startTime = wordStartTime,
-                                            endTime = wordEndTime,
-                                            isBackground = isBgSpan,
-                                        )
-                                    val lastWord = words.lastOrNull()
-
-                                    if (isSyllableContinuation && lastWord != null &&
-                                        !lastWord.text.endsWith(" ") &&
-                                        lastWord.isBackground == isBgSpan &&
-                                        !isCjk(lastWord.text.trim()) && !isCjk(trimmedText) &&
-                                        trimmedText.isNotEmpty()
-                                    ) {
-                                        words[words.lastIndex] =
-                                            lastWord.copy(
-                                                text = lastWord.text + trimmedText,
+                                    if (trimmedText.isNotEmpty()) {
+                                        words.add(
+                                            ParsedWord(
+                                                text = trimmedText,
+                                                startTime = wordStartTime,
                                                 endTime = wordEndTime,
-                                            )
-                                    } else if (trimmedText.isNotEmpty()) {
-                                        words.add(newWord)
+                                                isBackground = isBgSpan,
+                                            ),
+                                        )
                                     }
                                 }
                             }
