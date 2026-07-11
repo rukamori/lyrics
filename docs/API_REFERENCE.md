@@ -116,7 +116,7 @@ Returns server health stats from the Paxsenix proxy.
 
 ## BetterLyrics
 
-**File:** `betterlyrics/src/main/kotlin/moe/ArchiveTuneApp/rukamori/betterlyrics/BetterLyrics.kt`
+**File:** `betterlyrics/src/main/kotlin/moe/rukamori/rukamori/betterlyrics/BetterLyrics.kt`
 **Object:** `BetterLyrics`
 
 ### Methods
