@@ -239,7 +239,7 @@ object PaxsenixLyrics {
             val scored =
                 songs
                     .mapNotNull { item ->
-                        val obj = item.jsonObject ?: return@mapNotNull null
+                        val obj = item.jsonObject
                         val attrs = obj["attributes"]?.jsonObject ?: return@mapNotNull null
                         val songId = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
                         val name = attrs["name"]?.jsonPrimitive?.contentOrNull ?: ""
