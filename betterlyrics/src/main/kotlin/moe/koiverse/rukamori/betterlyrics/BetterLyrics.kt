@@ -18,6 +18,7 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import moe.rukamori.archivetune.betterlyrics.models.TTMLResponse
 
@@ -25,6 +26,7 @@ object BetterLyrics {
     private const val API_BASE_URL = "https://lyrics-api.boidu.dev/"
     private const val TTML_LYRICS_PATH = "getLyrics"
     private const val KUGOU_LYRICS_PATH = "kugou/getLyrics"
+    private const val PORTATO_LYRICS_PATH = "qq/getLyrics"
     private val jsonFormat by lazy {
         Json {
             isLenient = true
@@ -61,14 +63,13 @@ object BetterLyrics {
         title: String,
         album: String?,
         durationSeconds: Int,
+        endpoints: List<String>,
     ): String? {
         val cleanTitle = title.trim()
         val cleanArtist = artist.trim()
         val cleanAlbum = album?.trim().orEmpty()
 
         if (cleanTitle.isBlank() || cleanArtist.isBlank()) return null
-
-        val endpoints = listOf(TTML_LYRICS_PATH, KUGOU_LYRICS_PATH)
 
         for (endpoint in endpoints) {
             fetchLyricsFromEndpoint(
@@ -121,6 +122,8 @@ object BetterLyrics {
 
             logger?.invoke("$endpoint lyrics length: ${lyrics.length}")
             lyrics.takeIf { it.isNotBlank() }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             logger?.invoke("$endpoint error fetching lyrics: ${e.stackTraceToString()}")
             null
@@ -164,18 +167,34 @@ object BetterLyrics {
         artist: String,
         album: String? = null,
         durationSeconds: Int = -1,
-    ) = runCatching {
-        require(title.isNotBlank() && artist.isNotBlank()) { "Song title and artist are required" }
-        val ttml =
+    ): Result<String> =
+        runSuspendCatching {
+            require(title.isNotBlank() && artist.isNotBlank()) { "Song title and artist are required" }
             fetchLyrics(
                 artist = artist,
                 title = title,
                 album = album,
                 durationSeconds = durationSeconds,
-            )
-                ?: throw IllegalStateException("Lyrics unavailable")
-        ttml
-    }
+                endpoints = listOf(TTML_LYRICS_PATH, KUGOU_LYRICS_PATH),
+            ) ?: throw IllegalStateException("Lyrics unavailable")
+        }
+
+    suspend fun getPortatoLyrics(
+        title: String,
+        artist: String,
+        album: String? = null,
+        durationSeconds: Int = -1,
+    ): Result<String> =
+        runSuspendCatching {
+            require(title.isNotBlank() && artist.isNotBlank()) { "Song title and artist are required" }
+            fetchLyrics(
+                artist = artist,
+                title = title,
+                album = album,
+                durationSeconds = durationSeconds,
+                endpoints = listOf(PORTATO_LYRICS_PATH),
+            ) ?: throw IllegalStateException("Portato lyrics unavailable")
+        }
 
     suspend fun getAllLyrics(
         title: String,
@@ -195,4 +214,28 @@ object BetterLyrics {
             callback(ttml)
         }
     }
+
+    suspend fun getAllPortatoLyrics(
+        title: String,
+        artist: String,
+        album: String? = null,
+        durationSeconds: Int = -1,
+        callback: (String) -> Unit,
+    ) {
+        getPortatoLyrics(
+            title = title,
+            artist = artist,
+            album = album,
+            durationSeconds = durationSeconds,
+        ).onSuccess(callback)
+    }
+
+    private suspend fun <T> runSuspendCatching(block: suspend () -> T): Result<T> =
+        try {
+            Result.success(block())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
 }
