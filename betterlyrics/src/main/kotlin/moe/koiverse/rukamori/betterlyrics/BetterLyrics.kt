@@ -20,6 +20,11 @@ import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import moe.rukamori.archivetune.betterlyrics.models.TTMLResponse
 
 object BetterLyrics {
@@ -27,6 +32,13 @@ object BetterLyrics {
     private const val TTML_LYRICS_PATH = "getLyrics"
     private const val KUGOU_LYRICS_PATH = "kugou/getLyrics"
     private const val PORTATO_LYRICS_PATH = "qq/getLyrics"
+    private const val MAX_RESPONSE_UNWRAP_DEPTH = 2
+    private val ttmlRootRegex = Regex("""<(?:[A-Za-z_][\w.-]*:)?tt(?:\s|>)""", RegexOption.IGNORE_CASE)
+
+    private data class DecodedLyrics(
+        val content: String,
+        val score: Double?,
+    )
     private val jsonFormat by lazy {
         Json {
             isLenient = true
@@ -112,16 +124,19 @@ object BetterLyrics {
                 return null
             }
 
-            val lyrics =
+            val decoded =
                 try {
                     decodeLyrics(responseText)
                 } catch (e: Exception) {
                     logger?.invoke("$endpoint parse error: ${e.message}")
-                    ""
+                    null
                 }
 
-            logger?.invoke("$endpoint lyrics length: ${lyrics.length}")
-            lyrics.takeIf { it.isNotBlank() }
+            decoded?.score?.let { score ->
+                logger?.invoke("$endpoint match score: $score")
+            }
+            logger?.invoke("$endpoint lyrics length: ${decoded?.content?.length ?: 0}")
+            decoded?.content?.takeIf { it.isNotBlank() }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -130,11 +145,59 @@ object BetterLyrics {
         }
     }
 
-    private fun decodeLyrics(responseText: String): String {
-        val trimmed = responseText.trim()
-        if (trimmed.startsWith("<")) return trimmed
-        return jsonFormat.decodeFromString<TTMLResponse>(responseText).ttml
+    private fun decodeLyrics(responseText: String): DecodedLyrics? {
+        val raw = responseText.removePrefix("\uFEFF")
+        if (isTtmlPayload(raw)) return DecodedLyrics(content = raw, score = null)
+
+        val root = jsonFormat.parseToJsonElement(responseText)
+        val response = runCatching { jsonFormat.decodeFromJsonElement<TTMLResponse>(root) }.getOrNull()
+        if (response != null && isTtmlPayload(response.ttml)) {
+            return DecodedLyrics(content = response.ttml, score = response.score)
+        }
+
+        val nested = decodeLyricsElement(root, depth = 0) ?: return null
+        return nested.copy(score = response?.score ?: nested.score)
     }
+
+    private fun decodeLyricsElement(
+        element: JsonElement,
+        depth: Int,
+    ): DecodedLyrics? {
+        if (depth > MAX_RESPONSE_UNWRAP_DEPTH) return null
+
+        return when (element) {
+            is JsonObject -> {
+                val score = (element["score"] as? JsonPrimitive)?.doubleOrNull
+                val payload =
+                    element["ttml"]
+                        ?: element["lyrics"]
+                        ?: element["data"]
+                        ?: element["result"]
+                        ?: element["response"]
+                        ?: return null
+                val decoded = decodeLyricsElement(payload, depth + 1) ?: return null
+                decoded.copy(score = score ?: decoded.score)
+            }
+
+            is JsonPrimitive -> {
+                val content = element.contentOrNull ?: return null
+                when {
+                    isTtmlPayload(content) -> DecodedLyrics(content = content, score = null)
+                    depth < MAX_RESPONSE_UNWRAP_DEPTH -> {
+                        val nested = runCatching { jsonFormat.parseToJsonElement(content) }.getOrNull() ?: return null
+                        decodeLyricsElement(nested, depth + 1)
+                    }
+
+                    else -> null
+                }
+            }
+
+            else -> null
+        }
+    }
+
+    private fun isTtmlPayload(value: String): Boolean =
+        ttmlRootRegex.containsMatchIn(value.take(MAX_TTML_ROOT_SCAN_LENGTH))
 
     private fun buildRequestLog(
         endpoint: String,
@@ -238,4 +301,6 @@ object BetterLyrics {
         } catch (e: Exception) {
             Result.failure(e)
         }
+
+    private const val MAX_TTML_ROOT_SCAN_LENGTH = 4096
 }
