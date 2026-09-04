@@ -150,7 +150,10 @@ object BetterLyrics {
         if (isTtmlPayload(raw)) return DecodedLyrics(content = raw, score = null)
 
         val root = jsonFormat.parseToJsonElement(responseText)
-        val response = runCatching { jsonFormat.decodeFromJsonElement<TTMLResponse>(root) }.getOrNull()
+        val response =
+            runCatching {
+                jsonFormat.decodeFromJsonElement(TTMLResponse.serializer(), root)
+            }.getOrNull()
         if (response != null && isTtmlPayload(response.ttml)) {
             return DecodedLyrics(content = response.ttml, score = response.score)
         }
