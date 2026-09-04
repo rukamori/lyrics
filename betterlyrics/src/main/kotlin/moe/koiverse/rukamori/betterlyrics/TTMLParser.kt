@@ -290,6 +290,7 @@ object TTMLParser {
                 )
             }.filter { it.id.isNotEmpty() }
             .distinctBy(TtmlAgent::id)
+            .toList()
 
     private fun parseHeadTracks(
         root: Element,
@@ -343,7 +344,7 @@ object TTMLParser {
                     translations = content.translations + key?.let(headTranslations::get).orEmpty(),
                     romanizations = content.romanizations + key?.let(headRomanizations::get).orEmpty(),
                 )
-            }
+            }.toList()
 
     private fun parseParagraphContent(
         paragraph: Element,
