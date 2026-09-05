@@ -11,9 +11,11 @@ import org.w3c.dom.Document
 import org.w3c.dom.Element
 import org.w3c.dom.Node
 import org.xml.sax.InputSource
+import org.xml.sax.SAXException
 import java.io.StringReader
 import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
+import javax.xml.parsers.ParserConfigurationException
 import kotlin.math.roundToLong
 
 object TTMLParser {
@@ -222,15 +224,41 @@ object TTMLParser {
     private fun parseXml(source: String): Document {
         val factory = DocumentBuilderFactory.newInstance()
         factory.isNamespaceAware = true
-        factory.isXIncludeAware = false
+        try {
+            factory.isXIncludeAware = false
+        } catch (_: UnsupportedOperationException) {
+        }
         factory.setExpandEntityReferences(false)
-        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-        factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
-        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-        factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-        runCatching { factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "") }
-        runCatching { factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "") }
-        return factory.newDocumentBuilder().parse(InputSource(StringReader(source)))
+        factory.setFeatureIfSupported("http://apache.org/xml/features/disallow-doctype-decl", true)
+        factory.setFeatureIfSupported("http://xml.org/sax/features/external-general-entities", false)
+        factory.setFeatureIfSupported("http://xml.org/sax/features/external-parameter-entities", false)
+        factory.setFeatureIfSupported("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+        factory.setAttributeIfSupported(XMLConstants.ACCESS_EXTERNAL_DTD, "")
+        factory.setAttributeIfSupported(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "")
+
+        val builder = factory.newDocumentBuilder()
+        builder.setEntityResolver { _, _ -> throw SAXException("External XML entities are not supported") }
+        return builder.parse(InputSource(StringReader(source)))
+    }
+
+    private fun DocumentBuilderFactory.setFeatureIfSupported(
+        name: String,
+        value: Boolean,
+    ) {
+        try {
+            setFeature(name, value)
+        } catch (_: ParserConfigurationException) {
+        }
+    }
+
+    private fun DocumentBuilderFactory.setAttributeIfSupported(
+        name: String,
+        value: String,
+    ) {
+        try {
+            setAttribute(name, value)
+        } catch (_: IllegalArgumentException) {
+        }
     }
 
     private fun declareMissingNamespaces(source: String): String {
