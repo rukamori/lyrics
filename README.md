@@ -9,7 +9,7 @@
   </p>
 
   <p align="center">
-    <img src="https://img.shields.io/badge/Lyrics%20Sources-6-6366f1?style=for-the-badge&labelColor=1e1e2e" alt="6 Lyrics Sources" />
+    <img src="https://img.shields.io/badge/Lyrics%20Sources-10-6366f1?style=for-the-badge&labelColor=1e1e2e" alt="10 Lyrics Sources" />
     <img src="https://img.shields.io/github/license/rukamori/lyrics?style=for-the-badge&color=6366f1&labelColor=1e1e2e" alt="License" />
     <img src="https://img.shields.io/badge/Language-Kotlin-7f52ff?style=for-the-badge&logo=kotlin&color=6366f1&labelColor=1e1e2e" alt="Kotlin" />
     <img src="https://img.shields.io/badge/Runtime-JVM-6366f1?style=for-the-badge&logo=openjdk&labelColor=1e1e2e" alt="JVM" />
@@ -40,10 +40,13 @@ This repository contains the standalone lyrics provider modules extracted from [
 | `paxsenix` | Paxsenix | Multi-backend proxy client for `lyrics.paxsenix.org`. Wraps Apple Music, NetEase, Spotify, Musixmatch, and YouTube lyrics endpoints. |
 | `betterlyrics` | BetterLyrics | Fetches TTML (Apple Music format) lyrics from `lyrics-api.boidu.dev`. Includes a full XML DOM-based TTML parser with word-by-word timing, CJK support, and transliteration. |
 | `unison` | Unison | Fetches lyrics from `unison.boidu.dev`. Supports lookup by video ID or metadata (title, artist, album, duration). |
+| `lrcred` | lrc.red | Fetches word/line-timed TTML from `lrc.red`. Searches by title+artist, matches by normalized title, artist and a 3-second duration tolerance, then downloads `/s/{isrc}.ttml`. Requests carry an identifying User-Agent as required by the lrc.red API terms. |
+| `binimum` | Binimum Lyrics | Fetches TTML from `lyrics-api.binimum.org`. Looks up by track, artist, album and duration, preferring word-timed results. |
+| `megalobiz` | Megalobiz | Scrapes LRC lyrics from `megalobiz.com` search and download pages. |
 
 ## Features
 
-- **Six independent providers** — each module is a separate Gradle subproject with no cross-dependencies
+- **Ten independent providers** — each module is a separate Gradle subproject with no cross-dependencies
 - **Pure JVM** — no Android SDK required, testable on any JVM
 - **Ktor Client** — built on Ktor with content negotiation and JSON serialization
 - **Kotlinx Serialization** — all API responses parsed into typed data classes
@@ -88,6 +91,15 @@ flowchart TB
         subgraph Unison["unison"]
             UN["Unison.kt<br/>Unison API"]
         end
+        subgraph Lrcred["lrcred"]
+            LR["LrcRed.kt<br/>lrc.red API"]
+        end
+        subgraph Binimum["binimum"]
+            BN["BinimumLyrics.kt<br/>Binimum API"]
+        end
+        subgraph Megalobiz["megalobiz"]
+            MG["MegalobizLyrics.kt<br/>Megalobiz scraper"]
+        end
     end
 
     subgraph External["External APIs"]
@@ -97,11 +109,14 @@ flowchart TB
         EXPX["lyrics.paxsenix.org"]
         EXBL["lyrics-api.boidu.dev"]
         EXUN["unison.boidu.dev"]
+        EXLR["lrc.red"]
+        EXBN["lyrics-api.binimum.org"]
+        EXMG["megalobiz.com"]
     end
 
     UI --> VM --> LH
     LH --> LP
-    LP --> KG & LL & SM & PX & BL & UN
+    LP --> KG & LL & SM & PX & BL & UN & LR & BN & MG
     KG --> EXKG
     LL --> EXLL
     SM --> EXSM
@@ -109,6 +124,9 @@ flowchart TB
     PXAM & PXNE & PXSP & PXMX & PXYT --> PX
     BL --> EXBL
     UN --> EXUN
+    LR --> EXLR
+    BN --> EXBN
+    MG --> EXMG
 ```
 
 **Data flow:**
@@ -134,8 +152,14 @@ moe.rukamori.archivetune/
 ├── betterlyrics/            # betterlyrics module
 │   ├── BetterLyrics.kt      — BetterLyrics API client
 │   └── TTMLParser.kt        — TTML XML parser
-└── unison/                  # unison module
-    └── Unison.kt            — Unison API client
+├── unison/                  # unison module
+│   └── Unison.kt            — Unison API client
+├── lrcred/                  # lrcred module
+│   └── LrcRed.kt            — lrc.red API client
+├── binimum/                 # binimum module
+│   └── BinimumLyrics.kt     — Binimum Lyrics API client
+└── megalobiz/               # megalobiz module
+    └── MegalobizLyrics.kt   — Megalobiz LRC scraper
 ```
 
 ## Dependencies
@@ -217,6 +241,40 @@ val lyrics = Unison.getLyrics(
     artist = "Rick Astley",
     album = "Whenever You Need Somebody",
     durationSeconds = 213,
+)
+```
+
+### lrc.red
+
+```kotlin
+LrcRed.setUserAgent(appName = "ArchiveTune", versionName = "1.0.0")
+
+val lyrics = LrcRed.getLyrics(
+    title = "Never Gonna Give You Up",
+    artist = "Rick Astley",
+    durationSeconds = 213,
+)
+```
+
+Data from lrc.red must be credited with a link back to [lrc.red](https://lrc.red) wherever it is shown.
+
+### Binimum Lyrics
+
+```kotlin
+val lyrics = BinimumLyrics.getLyrics(
+    title = "Never Gonna Give You Up",
+    artist = "Rick Astley",
+    album = "Whenever You Need Somebody",
+    durationSeconds = 213,
+)
+```
+
+### Megalobiz
+
+```kotlin
+val lyrics = MegalobizLyrics.getLyrics(
+    title = "Never Gonna Give You Up",
+    artist = "Rick Astley",
 )
 ```
 
