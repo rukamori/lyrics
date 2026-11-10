@@ -14,7 +14,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.yield
 import java.util.concurrent.atomic.AtomicBoolean
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
 import moe.rukamori.archivetune.musixmatch.models.Track
@@ -146,7 +145,6 @@ internal suspend fun Musixmatch.resolveSearchFallback(
             val candidate = candidates[index]
             val rank = index + 1
             val job = launch {
-                if (index > 0) yield()
                 val outcome = try {
                     val resolved = resolveRequest(
                         MacroTarget.ById(candidate.track.trackId, title, artist, durationSeconds),

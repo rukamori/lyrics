@@ -64,7 +64,7 @@ class MusixmatchHybridTest {
     }
 
     private suspend fun playback() = Musixmatch.getLyrics("Koiiro", "Mosawo", "Album", 100)
-    private fun ids() = requests.filter { it.encodedPath.endsWith("macro.subtitles.get") }.mapNotNull { it.parameters["track_id"]?.toLongOrNull() }
+    private fun ids() = requests.filter { it.encodedPath.endsWith("macro.subtitles.get") }.mapNotNull { it.parameters["track_id"]?.toLongOrNull() }.sorted()
     private fun titles() = requests.filter { it.encodedPath.endsWith("macro.subtitles.get") && it.parameters["track_id"] == null }
     private fun searches() = requests.count { it.encodedPath.endsWith("track.search") }
 
