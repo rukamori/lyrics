@@ -9,25 +9,27 @@ package moe.rukamori.archivetune.unison
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
+import io.ktor.client.request.url
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
-import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.Json
-import moe.rukamori.archivetune.unison.models.UnisonEntry
+import moe.rukamori.archivetune.unison.models.UnisonListResponse
+import moe.rukamori.archivetune.unison.models.UnisonLyrics
 import moe.rukamori.archivetune.unison.models.UnisonResponse
-import moe.rukamori.archivetune.unison.models.UnisonSearchResponse
+import moe.rukamori.archivetune.unison.models.toLyrics
 
 object Unison {
-    private const val API_BASE_URL = "https://unison.boidu.dev/"
-    private const val MAX_SEARCH_RESULTS = 5
-    private const val MAX_LOG_BODY_LENGTH = 200
+    private const val API_BASE_URL = "https://unison.betterlyrics.org/"
+    private const val MAX_RESULTS = 5
+    private val VIDEO_ID_REGEX = Regex("^[A-Za-z0-9_-]{11}$")
 
     private val jsonFormat by lazy {
         Json {
@@ -39,10 +41,6 @@ object Unison {
 
     private val client by lazy {
         HttpClient(OkHttp) {
-            install(ContentNegotiation) {
-                json(jsonFormat)
-            }
-
             install(HttpTimeout) {
                 requestTimeoutMillis = 20000
                 connectTimeoutMillis = 15000
@@ -59,146 +57,29 @@ object Unison {
 
     var logger: ((String) -> Unit)? = null
 
-    private suspend fun fetchEntry(
-        videoId: String?,
-        title: String,
-        artist: String,
-        album: String?,
-        durationSeconds: Int,
-    ): UnisonEntry? {
-        val cleanTitle = title.trim()
-        val cleanArtist = artist.trim()
-
-        if (cleanTitle.isBlank() || cleanArtist.isBlank()) return null
-
-        val byMetadata = searchEntries(cleanTitle, cleanArtist, album?.trim(), durationSeconds).firstOrNull()
-        if (byMetadata != null) return byMetadata
-
-        val cleanVideoId = videoId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        logger?.invoke("No metadata match, fetching Unison lyrics by videoId: $cleanVideoId")
-        return fetchByVideoId(cleanVideoId)
-    }
-
-    private suspend fun fetchByVideoId(videoId: String): UnisonEntry? {
-        return try {
-            val response =
-                client.get("lyrics") {
-                    parameter("v", videoId)
-                }
-            logger?.invoke("Unison videoId response status: ${response.status}")
-            if (!response.status.isSuccess()) return null
-            val body = response.bodyAsText()
-            logger?.invoke("Unison videoId raw response: ${body.take(MAX_LOG_BODY_LENGTH)}")
-            val parsed = runCatching { jsonFormat.decodeFromString<UnisonResponse>(body) }.getOrNull()
-            parsed?.takeIf { it.success }?.data?.takeIf { it.lyrics.isNotBlank() }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger?.invoke("Unison videoId fetch error: ${e.message}")
-            null
-        }
-    }
-
-    private suspend fun fetchById(id: Long): UnisonEntry? {
-        return try {
-            val response = client.get("lyrics/$id")
-            logger?.invoke("Unison ID response status: ${response.status}")
-            if (!response.status.isSuccess()) return null
-            val body = response.bodyAsText()
-            logger?.invoke("Unison ID raw response: ${body.take(MAX_LOG_BODY_LENGTH)}")
-            val parsed = runCatching { jsonFormat.decodeFromString<UnisonResponse>(body) }.getOrNull()
-            parsed?.takeIf { it.success }?.data?.takeIf { it.lyrics.isNotBlank() }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger?.invoke("Unison ID fetch error: ${e.message}")
-            null
-        }
-    }
-
-    private suspend fun fetchVariants(videoId: String): List<UnisonEntry> {
-        return try {
-            val response = client.get("lyrics/variants/$videoId")
-            logger?.invoke("Unison variants response status: ${response.status}")
-            if (!response.status.isSuccess()) return emptyList()
-            val body = response.bodyAsText()
-            logger?.invoke("Unison variants raw response: ${body.take(MAX_LOG_BODY_LENGTH)}")
-            val parsed = runCatching { jsonFormat.decodeFromString<UnisonSearchResponse>(body) }.getOrNull()
-            parsed
-                ?.takeIf { it.success }
-                ?.data
-                .orEmpty()
-                .asSequence()
-                .mapNotNull { it.toEntry() }
-                .take(MAX_SEARCH_RESULTS)
-                .toList()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger?.invoke("Unison variants fetch error: ${e.message}")
-            emptyList()
-        }
-    }
-
-    private suspend fun searchEntries(
-        title: String,
-        artist: String,
-        album: String?,
-        durationSeconds: Int,
-    ): List<UnisonEntry> {
-        val cleanTitle = title.trim()
-        val cleanArtist = artist.trim()
-        if (cleanTitle.isBlank() || cleanArtist.isBlank()) return emptyList()
-
-        logger?.invoke("Searching Unison lyrics: title=$cleanTitle, artist=$cleanArtist")
-        return try {
-            val response =
-                client.get("lyrics/search") {
-                    parameter("song", cleanTitle)
-                    parameter("artist", cleanArtist)
-                    if (!album.isNullOrBlank()) parameter("album", album.trim())
-                    if (durationSeconds > 0) parameter("duration", durationSeconds)
-                    parameter("limit", MAX_SEARCH_RESULTS)
-                }
-            logger?.invoke("Unison search response status: ${response.status}")
-            if (!response.status.isSuccess()) return emptyList()
-            val body = response.bodyAsText()
-            logger?.invoke("Unison search raw response: ${body.take(MAX_LOG_BODY_LENGTH)}")
-            val parsed = runCatching { jsonFormat.decodeFromString<UnisonSearchResponse>(body) }.getOrNull()
-            val summaries = parsed?.takeIf { it.success }?.data.orEmpty()
-            val entries = mutableListOf<UnisonEntry>()
-            for (summary in summaries) {
-                currentCoroutineContext().ensureActive()
-                if (entries.size >= MAX_SEARCH_RESULTS) break
-                val entry =
-                    summary.toEntry()
-                        ?: summary.videoId?.takeIf { it.isNotBlank() }?.let { fetchByVideoId(it) }
-                        ?: fetchById(summary.id)
-                if (entry != null) entries += entry
-            }
-            entries
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger?.invoke("Unison search fetch error: ${e.message}")
-            emptyList()
-        }
-    }
-
     suspend fun getLyrics(
         videoId: String? = null,
         title: String,
         artist: String,
         album: String? = null,
         durationSeconds: Int = -1,
-    ): Result<String> =
+    ): Result<UnisonLyrics> =
         try {
-            require(title.isNotBlank() && artist.isNotBlank()) { "Song title and artist are required" }
+            val cleanVideoId = videoId.toVideoIdOrNull()
+            val cleanTitle = title.trim()
+            val cleanArtist = artist.trim()
+            val hasMetadata = cleanTitle.isNotEmpty() && cleanArtist.isNotEmpty()
+            require(cleanVideoId != null || hasMetadata) { "A video id or song title and artist are required" }
+
             val entry =
-                fetchEntry(videoId, title, artist, album, durationSeconds)
+                cleanVideoId?.let { fetchByVideoId(it) }
+                    ?: (if (hasMetadata) fetchByMetadata(cleanTitle, cleanArtist, album, durationSeconds) else null)
                     ?: throw IllegalStateException("Lyrics unavailable")
-            logger?.invoke("Unison got lyrics: format=${entry.format}, syncType=${entry.syncType}, length=${entry.lyrics.length}")
-            Result.success(entry.lyrics)
+            logger?.invoke(
+                "Unison got lyrics: id=${entry.id}, format=${entry.format}, syncType=${entry.syncType}, " +
+                    "submitter=${entry.submitterName}",
+            )
+            Result.success(entry)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -211,22 +92,134 @@ object Unison {
         artist: String,
         album: String? = null,
         durationSeconds: Int = -1,
-        callback: (String) -> Unit,
+        callback: (UnisonLyrics) -> Unit,
     ) {
-        var results = searchEntries(title, artist, album, durationSeconds)
-        if (results.isEmpty()) {
-            val cleanVideoId = videoId?.trim()?.takeIf { it.isNotEmpty() }
-            if (cleanVideoId != null) {
-                results = fetchVariants(cleanVideoId)
-                if (results.isEmpty()) {
-                    results = listOfNotNull(fetchByVideoId(cleanVideoId))
-                }
+        val cleanVideoId = videoId.toVideoIdOrNull()
+        val cleanTitle = title.trim()
+        val cleanArtist = artist.trim()
+        val seenIds = HashSet<Long>()
+        var delivered = 0
+
+        suspend fun deliver(entries: List<UnisonLyrics>) {
+            for (entry in entries) {
+                currentCoroutineContext().ensureActive()
+                if (delivered >= MAX_RESULTS) return
+                if (!seenIds.add(entry.id)) continue
+                delivered++
+                logger?.invoke("Unison result $delivered: id=${entry.id}, format=${entry.format}, syncType=${entry.syncType}")
+                callback(entry)
             }
         }
-        results.take(MAX_SEARCH_RESULTS).forEachIndexed { index, entry ->
-            currentCoroutineContext().ensureActive()
-            logger?.invoke("Unison search result ${index + 1}: format=${entry.format}, syncType=${entry.syncType}")
-            callback(entry.lyrics)
+
+        if (cleanVideoId != null) deliver(fetchVariants(cleanVideoId))
+        if (delivered < MAX_RESULTS && cleanTitle.isNotEmpty() && cleanArtist.isNotEmpty()) {
+            deliver(searchByMetadata(cleanTitle, cleanArtist, album, durationSeconds))
         }
     }
+
+    private suspend fun fetchByVideoId(videoId: String): UnisonLyrics? =
+        fetchSingle("videoId") {
+            url("lyrics")
+            parameter("v", videoId)
+        }
+
+    private suspend fun fetchByMetadata(
+        title: String,
+        artist: String,
+        album: String?,
+        durationSeconds: Int,
+    ): UnisonLyrics? =
+        fetchSingle("metadata") {
+            url("lyrics")
+            metadataParameters(title, artist, album, durationSeconds)
+        }
+
+    private suspend fun fetchVariants(videoId: String): List<UnisonLyrics> =
+        fetchList("variants") {
+            url("lyrics/variants/$videoId")
+            parameter("limit", MAX_RESULTS)
+        }
+
+    private suspend fun searchByMetadata(
+        title: String,
+        artist: String,
+        album: String?,
+        durationSeconds: Int,
+    ): List<UnisonLyrics> =
+        fetchList("search") {
+            url("lyrics/search")
+            metadataParameters(title, artist, album, durationSeconds)
+            parameter("limit", MAX_RESULTS)
+        }
+
+    private fun HttpRequestBuilder.metadataParameters(
+        title: String,
+        artist: String,
+        album: String?,
+        durationSeconds: Int,
+    ) {
+        parameter("song", title)
+        parameter("artist", artist)
+        album?.trim()?.takeIf { it.isNotEmpty() }?.let { parameter("album", it) }
+        if (durationSeconds > 0) parameter("duration", durationSeconds)
+    }
+
+    private suspend fun fetchSingle(
+        lookup: String,
+        block: HttpRequestBuilder.() -> Unit,
+    ): UnisonLyrics? {
+        val body = fetchBody(lookup, block) ?: return null
+        val parsed =
+            runCatching { jsonFormat.decodeFromString<UnisonResponse>(body) }
+                .onFailure { logger?.invoke("Unison $lookup parse error: ${it.message}") }
+                .getOrNull()
+                ?: return null
+        if (!parsed.success) {
+            logger?.invoke("Unison $lookup unsuccessful: code=${parsed.code}")
+            return null
+        }
+        parsed.data?.matchedBy?.let { logger?.invoke("Unison $lookup matchedBy=$it") }
+        return parsed.data?.toLyrics()
+    }
+
+    private suspend fun fetchList(
+        lookup: String,
+        block: HttpRequestBuilder.() -> Unit,
+    ): List<UnisonLyrics> {
+        val body = fetchBody(lookup, block) ?: return emptyList()
+        val parsed =
+            runCatching { jsonFormat.decodeFromString<UnisonListResponse>(body) }
+                .onFailure { logger?.invoke("Unison $lookup parse error: ${it.message}") }
+                .getOrNull()
+                ?: return emptyList()
+        if (!parsed.success) {
+            logger?.invoke("Unison $lookup unsuccessful: code=${parsed.code}")
+            return emptyList()
+        }
+        return parsed.data.orEmpty().mapNotNull { it.toLyrics() }
+    }
+
+    private suspend fun fetchBody(
+        lookup: String,
+        block: HttpRequestBuilder.() -> Unit,
+    ): String? =
+        try {
+            val response = client.get(block)
+            logger?.invoke("Unison $lookup response status: ${response.status}")
+            when {
+                response.status.isSuccess() -> response.bodyAsText()
+                response.status == HttpStatusCode.NotFound -> null
+                else -> {
+                    logger?.invoke("Unison $lookup failed: ${response.status}")
+                    null
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger?.invoke("Unison $lookup fetch error: ${e.message}")
+            null
+        }
+
+    private fun String?.toVideoIdOrNull(): String? = this?.trim()?.takeIf { VIDEO_ID_REGEX.matches(it) }
 }
