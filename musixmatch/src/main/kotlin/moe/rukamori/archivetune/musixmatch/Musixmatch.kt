@@ -239,10 +239,15 @@ object Musixmatch {
         val inlineRichsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
             calls.trackRichsyncGet.bodyAs<RichSyncBody>(jsonFormat)?.richsync?.richsyncBody
         } else null
+        val inlineSubtitle = if (calls?.trackSubtitlesGet?.message?.header?.statusCode == 200) {
+            calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
+                ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
+        } else null
+
         var enrichmentTerminal: MusixmatchError? = null
-        val resolveEnrichment: suspend (suspend (String) -> String?, (String?) -> String?) -> String? = { fetch, tryFormat ->
+        val resolveEnrichment: suspend (suspend (String) -> String?) -> String? = { fetch ->
             try {
-                tokenState.execute { token -> fetch(token) }?.let { tryFormat(it) }
+                tokenState.execute { token -> fetch(token) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: MusixmatchError) {
@@ -254,17 +259,25 @@ object Musixmatch {
                 null
             }
         }
-        val richsync = lyricsFormat.tryTtml(inlineRichsync) ?: if (track.isRichsyncAvailable) {
-            resolveEnrichment({ fetchRichSyncSeparately(client, jsonFormat, track.commonTrackId, track.trackLength, it, contextLabel, logger) }, lyricsFormat::tryTtml)
-        } else null
-        richsync?.let { return ResolvedLyrics(it, 2, terminalError = enrichmentTerminal) }
 
-        val inlineSubtitle = if (calls?.trackSubtitlesGet?.message?.header?.statusCode == 200) {
-            calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
-                ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
+        val inlineFormatted = lyricsFormat.formatRichSync(inlineRichsync, inlineSubtitle)
+        if (inlineFormatted != null) {
+            return ResolvedLyrics(inlineFormatted.content, inlineFormatted.quality, terminalError = enrichmentTerminal)
+        }
+
+        val richsync = if (track.isRichsyncAvailable) {
+            val standaloneRichsync = resolveEnrichment { token ->
+                fetchRichSyncSeparately(client, jsonFormat, track.commonTrackId, track.trackLength, token, contextLabel, logger)
+            }
+            lyricsFormat.formatRichSync(standaloneRichsync, inlineSubtitle)
         } else null
+        richsync?.let { return ResolvedLyrics(it.content, it.quality, terminalError = enrichmentTerminal) }
+
         val subtitle = lyricsFormat.tryLrc(inlineSubtitle) ?: if (enrichmentTerminal == null && track.isSubtitlesAvailable) {
-            resolveEnrichment({ fetchSubtitleSeparately(client, jsonFormat, track.trackId, track.trackLength, it, contextLabel, logger) }, lyricsFormat::tryLrc)
+            val standaloneSubtitle = resolveEnrichment { token ->
+                fetchSubtitleSeparately(client, jsonFormat, track.trackId, track.trackLength, token, contextLabel, logger)
+            }
+            lyricsFormat.tryLrc(standaloneSubtitle)
         } else null
         subtitle?.let { return ResolvedLyrics(it, 1, terminalError = enrichmentTerminal) }
 

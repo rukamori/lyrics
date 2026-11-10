@@ -540,7 +540,7 @@ class MusixmatchHybridTest {
                             "track.subtitles.get":${call("{\"subtitle_list\":[{\"subtitle\":{\"subtitle_body\":\"[00:01.00] Line 1\"}}]}")}
                         }}"""), headers = headers)
                     } else {
-                        val richsyncJson = """[{"ts":1.0,"te":5.0,"l":[{"c":"Word","o":0.0}],"x":"Word"}]"""
+                        val richsyncJson = """[{"ts":1.0,"te":5.0,"l":[{"c":"Word","o":0.0},{"c":"Two","o":1.0}],"x":"Word Two"}]"""
                         respond(envelope("""{"macro_calls":{
                             "matcher.track.get":${call("{\"track\":${track(3, richsync = 1)}}")},
                             "track.richsync.get":${call("{\"richsync\":{\"richsync_body\":${quote(richsyncJson)}}}")}

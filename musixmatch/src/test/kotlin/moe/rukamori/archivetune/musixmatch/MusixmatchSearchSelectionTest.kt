@@ -383,7 +383,7 @@ class MusixmatchSearchSelectionTest {
     }
 
     private fun richsyncBody(text: String): String {
-        val richsync = """[{"ts":1.0,"te":3.0,"l":[{"c":${quote(text)},"o":0.0}],"x":${quote(text)}}]"""
+        val richsync = """[{"ts":1.0,"te":3.0,"l":[{"c":${quote(text)},"o":0.0},{"c":"!","o":1.0}],"x":${quote("$text!")}}]"""
         return """{"richsync":{"richsync_body":${quote(richsync)}}}"""
     }
 

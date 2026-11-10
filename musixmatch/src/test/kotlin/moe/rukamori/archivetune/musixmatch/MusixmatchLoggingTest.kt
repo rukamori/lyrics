@@ -54,7 +54,7 @@ class MusixmatchLoggingTest {
     private fun status(code: Int): String = """{"message":{"header":{"status_code":$code},"body":{}}}"""
     private fun call(body: String, status: Int = 200) = """{"message":{"header":{"status_code":$status},"body":$body}}"""
     private fun macro(id: Long = 1, matcherStatus: Int = 200, hasRichsync: Boolean = false): String = envelope(
-        """{"macro_calls":{"matcher.track.get":${call("{\"track\":${track(id)}}", matcherStatus)},"track.lyrics.get":${call("{\"lyrics\":{\"lyrics_body\":\"Text $id\",\"restricted\":0}}")},"track.subtitles.get":${call("{\"subtitle_list\":[{\"subtitle\":{\"subtitle_body\":\"[00:01.000] Sub $id\"}}]}")}${if (hasRichsync) ",\"track.richsync.get\":${call("{\"richsync\":{\"richsync_body\":\"[{\\\"ts\\\":1.0,\\\"te\\\":2.0,\\\"l\\\":[{\\\"c\\\":\\\"Word\\\",\\\"o\\\":0}]}]\"}}")}" else ""}}}"""
+        """{"macro_calls":{"matcher.track.get":${call("{\"track\":${track(id)}}", matcherStatus)},"track.lyrics.get":${call("{\"lyrics\":{\"lyrics_body\":\"Text $id\",\"restricted\":0}}")},"track.subtitles.get":${call("{\"subtitle_list\":[{\"subtitle\":{\"subtitle_body\":\"[00:01.000] Sub $id\"}}]}")}${if (hasRichsync) ",\"track.richsync.get\":${call("{\"richsync\":{\"richsync_body\":\"[{\\\"ts\\\":1.0,\\\"te\\\":2.0,\\\"l\\\":[{\\\"c\\\":\\\"Word\\\",\\\"o\\\":0},{\\\"c\\\":\\\"Two\\\",\\\"o\\\":0.5}]}]\"}}")}" else ""}}}"""
     )
 
     private fun assertAllLogsMatchAllowlist() {

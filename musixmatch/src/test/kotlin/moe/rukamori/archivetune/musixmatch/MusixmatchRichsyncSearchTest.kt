@@ -112,6 +112,15 @@ class MusixmatchRichsyncSearchTest {
     }
 
     @Test
+    fun inlineLineLevelRichsyncProducesLrcAndAvoidsStandaloneRichsync() = runBlocking {
+        val lineLevelRichsync = """{"richsync":{"richsync_body":${quote("""[{"ts":1.0,"te":3.0,"l":[{"c":"Line level","o":0.0}],"x":"Line level"}]""")}}}"""
+        setup(inline = lineLevelRichsync, subtitle = "Official LRC")
+        val searched = search().single()
+        assertFalse(searched.contains("<tt"))
+        assertTrue(richRequests().isEmpty())
+    }
+
+    @Test
     fun inlineRichsyncEmptyOrMalformedWithStatus200FallsBackToStandalone() = runBlocking {
         for (emptyBody in listOf("{}", "{\"richsync\":{}}", "{\"richsync\":{\"richsync_body\":\"\"}}", "{\"richsync\":{\"richsync_body\":\"invalid ttml\"}}")) {
             setup(inline = emptyBody)
@@ -161,7 +170,7 @@ class MusixmatchRichsyncSearchTest {
         """{"track_id":$id,"commontrack_id":${id + 1000},"track_name":"Song","artist_name":"Artist","track_length":100,"has_richsync":${if (rich) 1 else 0}}"""
     private fun envelope(body: String, status: Int = 200) = """{"message":{"header":{"status_code":$status},"body":$body}}"""
     private fun richBody(text: String): String {
-        val lines = """[{"ts":1.0,"te":3.0,"l":[{"c":${quote(text)},"o":0.0}],"x":${quote(text)}}]"""
+        val lines = """[{"ts":1.0,"te":3.0,"l":[{"c":${quote(text)},"o":0.0},{"c":"!","o":1.0}],"x":${quote("$text!")}}]"""
         return """{"richsync":{"richsync_body":${quote(lines)}}}"""
     }
     private fun macro(id: Int, rich: Boolean, inline: String? = null, subtitle: String? = null, plain: String? = null): String {
