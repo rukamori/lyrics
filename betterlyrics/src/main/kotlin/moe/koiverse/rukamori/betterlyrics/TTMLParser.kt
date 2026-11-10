@@ -65,11 +65,18 @@ object TTMLParser {
         val beginMs: Long?,
         val endMs: Long?,
         val durationMs: Long?,
-        val agentId: String?,
+        val agentIds: List<String>,
         val main: RawTrack,
         val backgrounds: List<RawTrack>,
         val translations: List<RawTrack>,
         val romanizations: List<RawTrack>,
+    )
+
+    private data class AgentDeclaration(
+        val id: String,
+        val name: String?,
+        val actorAgentId: String?,
+        val type: TtmlAgentType,
     )
 
     private data class ParagraphContent(
@@ -293,31 +300,54 @@ object TTMLParser {
         return TimingContext(tickRate = tickRate, frameRate = frameRate)
     }
 
-    private fun parseAgents(root: Element): List<TtmlAgent> =
-        root.descendantElements()
-            .filter { it.hasLocalName("agent") && it.attribute("id") != null }
-            .mapIndexed { index, element ->
-                TtmlAgent(
-                    id = element.attribute("id").orEmpty().removePrefix("#"),
-                    name =
-                        element.descendantElements()
-                            .firstOrNull { it.hasLocalName("name") }
-                            ?.textContent
-                            ?.normalizedText()
-                            ?.takeIf(String::isNotEmpty),
-                    type =
-                        when (element.attribute("type")?.lowercase()) {
-                            "person" -> TtmlAgentType.PERSON
-                            "character" -> TtmlAgentType.CHARACTER
-                            "group" -> TtmlAgentType.GROUP
-                            "organization" -> TtmlAgentType.ORGANIZATION
-                            else -> TtmlAgentType.OTHER
-                        },
-                    order = index,
-                )
-            }.filter { it.id.isNotEmpty() }
-            .distinctBy(TtmlAgent::id)
-            .toList()
+    private fun parseAgents(root: Element): List<TtmlAgent> {
+        val declarations =
+            root.descendantElements()
+                .filter { it.hasLocalName("agent") }
+                .mapNotNull { element ->
+                    val id = element.attribute("id")?.removePrefix("#")?.takeIf(String::isNotEmpty) ?: return@mapNotNull null
+                    AgentDeclaration(
+                        id = id,
+                        name = element.agentDisplayName(),
+                        actorAgentId =
+                            element.descendantElements()
+                                .firstOrNull { it.hasLocalName("actor") }
+                                ?.attribute("agent")
+                                ?.removePrefix("#")
+                                ?.takeIf(String::isNotEmpty),
+                        type =
+                            when (element.attribute("type")?.lowercase()) {
+                                "person" -> TtmlAgentType.PERSON
+                                "character" -> TtmlAgentType.CHARACTER
+                                "group" -> TtmlAgentType.GROUP
+                                "organization" -> TtmlAgentType.ORGANIZATION
+                                else -> TtmlAgentType.OTHER
+                            },
+                    )
+                }.distinctBy(AgentDeclaration::id)
+                .toList()
+        val declaredNames = declarations.associate { it.id to it.name }
+        return declarations.mapIndexed { index, declaration ->
+            TtmlAgent(
+                id = declaration.id,
+                name = declaration.name ?: declaration.actorAgentId?.let(declaredNames::get),
+                type = declaration.type,
+                order = index,
+            )
+        }
+    }
+
+    private fun Element.agentDisplayName(): String? {
+        val names =
+            descendantElements()
+                .filter { it.hasLocalName("name") }
+                .mapNotNull { nameElement ->
+                    val value = nameElement.textContent?.normalizedText()?.takeIf(String::isNotEmpty) ?: return@mapNotNull null
+                    nameElement.attribute("type")?.lowercase() to value
+                }.toList()
+        return AGENT_NAME_TYPE_PRIORITY.firstNotNullOfOrNull { type -> names.firstOrNull { it.first == type }?.second }
+            ?: names.firstOrNull()?.second
+    }
 
     private fun parseHeadTracks(
         root: Element,
@@ -365,7 +395,13 @@ object TTMLParser {
                     beginMs = paragraph.attribute("begin")?.let { parseTime(it, timingContext) },
                     endMs = paragraph.attribute("end")?.let { parseTime(it, timingContext) },
                     durationMs = paragraph.attribute("dur")?.let { parseTime(it, timingContext) },
-                    agentId = paragraph.inheritedAttribute("agent")?.removePrefix("#"),
+                    agentIds =
+                        paragraph.inheritedAttribute("agent")
+                            ?.split(WHITESPACE_REGEX)
+                            ?.map { it.removePrefix("#") }
+                            ?.filter(String::isNotEmpty)
+                            ?.distinct()
+                            .orEmpty(),
                     main = content.main.copy(text = mainText),
                     backgrounds = content.backgrounds,
                     translations = content.translations + key?.let(headTranslations::get).orEmpty(),
@@ -513,7 +549,7 @@ object TTMLParser {
     ): List<TtmlAgent> {
         val agents = declared.toMutableList()
         val knownIds = declared.mapTo(mutableSetOf(), TtmlAgent::id)
-        rawLines.mapNotNull(RawLine::agentId).forEach { id ->
+        rawLines.flatMap(RawLine::agentIds).forEach { id ->
             if (knownIds.add(id)) {
                 agents += TtmlAgent(id = id, name = null, type = TtmlAgentType.PERSON, order = agents.size)
             }
@@ -568,7 +604,7 @@ object TTMLParser {
                 backgrounds = backgrounds.filter { it.text.isNotBlank() },
                 translations = translations.filter { it.text.isNotBlank() },
                 romanizations = romanizations.filter { it.text.isNotBlank() },
-                agent = rawLine.agentId?.let(agentById::get),
+                agents = rawLine.agentIds.mapNotNull(agentById::get),
             )
         }
     }
@@ -798,6 +834,7 @@ object TTMLParser {
             "composer" to "http://composer.boidu.dev/ttml",
         )
     private val SUPPLEMENTARY_ROLES = setOf("x-bg", "x-translation", "x-roman")
+    private val AGENT_NAME_TYPE_PRIORITY = listOf("full", "alias", "given", "family", "other")
     private const val MILLIS_PER_SECOND = 1000.0
     private const val DEFAULT_FINAL_LINE_DURATION_MS = 4000L
 }

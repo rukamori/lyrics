@@ -51,8 +51,11 @@ data class TtmlLine(
     val backgrounds: List<TtmlTrack>,
     val translations: List<TtmlTrack>,
     val romanizations: List<TtmlTrack>,
-    val agent: TtmlAgent?,
-)
+    val agents: List<TtmlAgent>,
+) {
+    val agent: TtmlAgent?
+        get() = agents.firstOrNull()
+}
 
 data class TtmlDocument(
     val language: String?,

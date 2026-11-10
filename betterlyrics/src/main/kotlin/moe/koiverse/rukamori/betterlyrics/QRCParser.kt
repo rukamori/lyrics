@@ -13,6 +13,7 @@ object QRCParser {
         val endTime: Double,
         val words: List<ParsedWord>,
         val agent: String? = null,
+        val agentName: String? = null,
     )
 
     data class ParsedWord(
@@ -33,6 +34,7 @@ object QRCParser {
         var durationMs: Long,
         var words: MutableList<TimedWord>,
         var agent: String? = null,
+        var agentName: String? = null,
     )
 
     private data class TrackMetadata(
@@ -44,6 +46,7 @@ object QRCParser {
         val aliases: MutableMap<String, String> = mutableMapOf(),
         var nextVoiceId: Int = 1,
         var currentSinger: String? = null,
+        var currentSingerName: String? = null,
     )
 
     private val lineTimingRegex = Regex("""^\[(\d{1,8}),(\d{1,8})](.*)$""")
@@ -178,6 +181,7 @@ object QRCParser {
                 endTime = lineEndMs / 1000.0,
                 words = parsedWords,
                 agent = line.agent,
+                agentName = line.agentName,
             )
         }
     }
@@ -222,6 +226,7 @@ object QRCParser {
         val colonIndex = line.text.indexOfFirst { it == ':' || it == '：' }
         if (colonIndex < 0) {
             line.agent = context.currentSinger
+            line.agentName = context.currentSingerName
             return true
         }
 
@@ -229,6 +234,7 @@ object QRCParser {
         if (isMetadataPrefix(singerName)) return false
         if (singerName.isEmpty() || singerName.length > 30) {
             line.agent = context.currentSinger
+            line.agentName = context.currentSingerName
             return true
         }
 
@@ -242,12 +248,14 @@ object QRCParser {
                 }
             }
         context.currentSinger = agent
+        context.currentSingerName = singerName
 
         removeCharacterPrefix(line.words, colonIndex + 1)
         line.text = line.words.joinToString(separator = "") { it.text }.trim()
         if (line.text.isEmpty() || line.words.isEmpty()) return false
 
         line.agent = agent
+        line.agentName = singerName
         updateLineTiming(line)
         return true
     }
