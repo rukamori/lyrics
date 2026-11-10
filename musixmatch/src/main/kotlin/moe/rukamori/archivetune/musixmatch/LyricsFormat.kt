@@ -47,9 +47,14 @@ internal class LyricsFormat(private val jsonFormat: Json) {
     private val lrcTimestampTokenRegex = Regex("""\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]""")
 
     fun tryTtml(richSync: String?): String? {
-        return formatRichSync(richSync, subtitleBody = null)
-            ?.takeIf { it.quality == 2 }
-            ?.content
+        if (richSync.isNullOrBlank()) return null
+        val lines = runCatching {
+            jsonFormat.decodeFromString<List<RichSyncLine>>(richSync)
+        }.getOrNull() ?: return null
+        if (lines.isEmpty()) return null
+        val analysis = analyzeRichSync(lines)
+        if (!analysis.wordSync) return null
+        return MusixmatchTtml.convertRichSyncToTtml(lines).takeIf { it.isNotBlank() }
     }
 
     fun tryLrc(subtitleBody: String?): String? {
@@ -94,7 +99,7 @@ internal class LyricsFormat(private val jsonFormat: Json) {
         val fromJson = runCatching {
             val decoded = jsonFormat.decodeFromString<List<SubtitleLine>>(subtitleBody)
             if (decoded.isEmpty()) null
-            else decoded.map { ParsedLrcLine(it.time?.total ?: 0.0, it.text?.trim().orEmpty()) }
+            else decoded.map { ParsedLrcLine(it.time?.total ?: 0.0, it.text?.trim().orEmpty()) }.sortedBy { it.seconds }
         }.getOrNull()
         if (fromJson != null) return fromJson
 
