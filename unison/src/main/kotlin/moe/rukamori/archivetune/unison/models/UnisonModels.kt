@@ -6,67 +6,55 @@
  */
 package moe.rukamori.archivetune.unison.models
 
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+
+@Serializable
+data class UnisonSubmitter(
+    val displayName: String? = null,
+)
 
 @Serializable
 data class UnisonEntry(
     val id: Long,
-    @SerialName("videoId") val videoId: String? = null,
-    val song: String,
-    val artist: String,
-    val lyrics: String,
-    val format: String,
-    val syncType: String,
-    val score: Double = 0.0,
-    val effectiveScore: Double = 0.0,
-    val voteCount: Int = 0,
-    val confidence: String = "low",
-    val language: String? = null,
-)
-
-@Serializable
-data class UnisonSearchEntry(
-    val id: Long,
-    @SerialName("videoId") val videoId: String? = null,
-    val song: String,
-    val artist: String,
+    val videoId: String? = null,
     val lyrics: String? = null,
-    val format: String,
-    val syncType: String,
-    val score: Double = 0.0,
-    val effectiveScore: Double = 0.0,
-    val voteCount: Int = 0,
-    val confidence: String = "low",
-    val language: String? = null,
-) {
-    fun toEntry(): UnisonEntry? {
-        val nonBlankLyrics = lyrics?.takeIf { it.isNotBlank() } ?: return null
-        return UnisonEntry(
-            id = id,
-            videoId = videoId,
-            song = song,
-            artist = artist,
-            lyrics = nonBlankLyrics,
-            format = format,
-            syncType = syncType,
-            score = score,
-            effectiveScore = effectiveScore,
-            voteCount = voteCount,
-            confidence = confidence,
-            language = language,
-        )
-    }
-}
+    val format: String? = null,
+    val syncType: String? = null,
+    val matchedBy: String? = null,
+    val hidden: Boolean = false,
+    val submitter: UnisonSubmitter? = null,
+)
 
 @Serializable
 data class UnisonResponse(
-    val success: Boolean,
+    val success: Boolean = false,
     val data: UnisonEntry? = null,
+    val code: String? = null,
 )
 
 @Serializable
-data class UnisonSearchResponse(
-    val success: Boolean,
-    val data: List<UnisonSearchEntry>? = null,
+data class UnisonListResponse(
+    val success: Boolean = false,
+    val data: List<UnisonEntry>? = null,
+    val code: String? = null,
 )
+
+data class UnisonLyrics(
+    val id: Long,
+    val lyrics: String,
+    val format: String?,
+    val syncType: String?,
+    val submitterName: String?,
+)
+
+internal fun UnisonEntry.toLyrics(): UnisonLyrics? {
+    if (hidden) return null
+    val body = lyrics?.takeIf { it.isNotBlank() } ?: return null
+    return UnisonLyrics(
+        id = id,
+        lyrics = body,
+        format = format,
+        syncType = syncType,
+        submitterName = submitter?.displayName?.trim()?.takeIf { it.isNotEmpty() },
+    )
+}

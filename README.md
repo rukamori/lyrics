@@ -39,7 +39,7 @@ This repository contains the standalone lyrics provider modules extracted from [
 | `simpmusic` | SimpMusic | Fetches crowd-sourced lyrics from `api-lyrics.simpmusic.org`. Indexed by YouTube video ID. |
 | `paxsenix` | Paxsenix | Multi-backend proxy client for `lyrics.paxsenix.org`. Wraps Apple Music, NetEase, Spotify, Musixmatch, and YouTube lyrics endpoints. |
 | `betterlyrics` | BetterLyrics | Fetches TTML (Apple Music format) lyrics from `lyrics-api.boidu.dev`. Includes a full XML DOM-based TTML parser with word-by-word timing, CJK support, and transliteration. |
-| `unison` | Unison | Fetches lyrics from `unison.boidu.dev`. Supports lookup by video ID or metadata (title, artist, album, duration). |
+| `unison` | Unison | Fetches community-synced lyrics from `unison.betterlyrics.org`. Looks up by video ID, then by metadata (title, artist, album, duration), and returns the submitter for attribution. |
 | `lrcred` | lrc.red | Fetches word/line-timed TTML from `lrc.red`. Searches by title+artist, matches by normalized title, artist and a 3-second duration tolerance, then downloads `/s/{isrc}.ttml`. Requests carry an identifying User-Agent as required by the lrc.red API terms. |
 | `binimum` | Binimum Lyrics | Fetches TTML from `lyrics-api.binimum.org`. Looks up by track, artist, album and duration, preferring word-timed results. |
 | `megalobiz` | Megalobiz | Scrapes LRC lyrics from `megalobiz.com` search and download pages. |
@@ -108,7 +108,7 @@ flowchart TB
         EXSM["api-lyrics.simpmusic.org"]
         EXPX["lyrics.paxsenix.org"]
         EXBL["lyrics-api.boidu.dev"]
-        EXUN["unison.boidu.dev"]
+        EXUN["unison.betterlyrics.org"]
         EXLR["lrc.red"]
         EXBN["lyrics-api.binimum.org"]
         EXMG["megalobiz.com"]

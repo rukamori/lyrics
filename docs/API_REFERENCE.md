@@ -152,18 +152,20 @@ Parses TTML XML into word-by-word timed entries. Handles CJK characters, transli
 
 ### Methods
 
-#### `getLyrics(videoId?, title?, artist?, album?, durationSeconds?)`
+Base URL: `https://unison.betterlyrics.org`. Every `/lyrics` response is wrapped as `{ success, data }`.
+
+#### `getLyrics(videoId?, title, artist, album?, durationSeconds?)`
 
 | Parameter | Type | Description |
 |---|---|---|
-| `videoId` | `String?` | YouTube video ID |
-| `title` | `String?` | Track title |
-| `artist` | `String?` | Artist name |
-| `album` | `String?` | Optional album |
-| `durationSeconds` | `Int?` | Duration in seconds |
+| `videoId` | `String?` | YouTube video ID (`GET /lyrics?v=`) |
+| `title` | `String` | Track title |
+| `artist` | `String` | Artist name; any one credited artist matches |
+| `album` | `String?` | Optional album, used to disambiguate recordings |
+| `durationSeconds` | `Int` | Duration in seconds, matched within a small tolerance; `-1` to omit |
 
-At least one of `videoId` or `(title + artist)` is required. Returns `Result<String>`.
+Tries `GET /lyrics?v=<videoId>` first, then `GET /lyrics?song=&artist=&album=&duration=`. At least one of `videoId` or `(title + artist)` is required. Hidden entries are skipped. Returns `Result<UnisonLyrics>`, which carries `lyrics`, `format`, `syncType` and `submitterName` (`submitter.displayName`) for attribution.
 
-#### `getAllLyrics(videoId?, title?, artist?, album?, durationSeconds?, callback)`
+#### `getAllLyrics(videoId?, title, artist, album?, durationSeconds?, callback)`
 
-Batch variant — searches by metadata and yields results through callback.
+Yields up to 5 distinct versions through `callback`: first `GET /lyrics/variants/<videoId>`, then the exact-match `GET /lyrics/search?song=&artist=` records.
