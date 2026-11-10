@@ -10,46 +10,19 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class MusixmatchResponse<T>(
-    val message: Message<T>,
+data class ApiResponse<T>(
+    val message: ApiMessage<T>? = null,
 )
 
 @Serializable
-data class Message<T>(
-    val header: Header,
+data class ApiMessage<T>(
+    val header: MusixmatchHeader = MusixmatchHeader(),
     val body: T? = null,
 )
 
 @Serializable
-data class Header(
-    @SerialName("status_code")
-    val statusCode: Int,
+data class MusixmatchHeader(
+    @SerialName("status_code") val statusCode: Int = 0,
+    @SerialName("execute_time") val executeTime: Double = 0.0,
 )
 
-@Serializable
-data class Track(
-    @SerialName("track_id")
-    val trackId: Long,
-    @SerialName("track_name")
-    val trackName: String,
-    @SerialName("artist_name")
-    val artistName: String,
-    @SerialName("track_length")
-    val trackLength: Int = 0,
-    @SerialName("instrumental")
-    val instrumental: Int = 0,
-    @SerialName("restricted")
-    val restricted: Int = 0,
-    @SerialName("has_lyrics")
-    val hasLyrics: Int = 0,
-    @SerialName("has_subtitles")
-    val hasSubtitles: Int = 0,
-    @SerialName("has_richsync")
-    val hasRichsync: Int = 0,
-    @SerialName("track_rating")
-    val trackRating: Int = 0,
-    @SerialName("commontrack_id")
-    val commontrackId: Long? = null,
-    @SerialName("album_name")
-    val albumName: String? = null,
-)

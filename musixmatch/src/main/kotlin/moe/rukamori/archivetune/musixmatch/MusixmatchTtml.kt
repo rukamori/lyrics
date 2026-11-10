@@ -45,15 +45,15 @@ internal object MusixmatchTtml {
         }
 
     fun convertLine(line: RichSyncLine): String? {
-        val words = line.l
-        val rawText = line.x
+        val words = line.words
+        val rawText = line.text
 
         if (words.isEmpty() && rawText.isNullOrBlank()) {
             return null
         }
 
-        val lineStart = line.ts
-        val lineEnd = line.te
+        val lineStart = line.startTime
+        val lineEnd = line.endTime
         if (lineEnd <= lineStart || lineEnd - lineStart < 2 * MIN_SPAN) {
             return null
         }
@@ -62,11 +62,11 @@ internal object MusixmatchTtml {
         val wordIndices = mutableListOf<Int>()
 
         for (item in words) {
-            val c = item.c
+            val c = item.text
             if (c.isBlank()) {
                 tokens.add(Token.Gap(text = c))
             } else {
-                val clampedStart = (lineStart + item.o).coerceIn(lineStart, lineEnd - MIN_SPAN)
+                val clampedStart = (lineStart + item.offset).coerceIn(lineStart, lineEnd - MIN_SPAN)
                 tokens.add(Token.Word(text = c, start = clampedStart))
                 wordIndices.add(tokens.lastIndex)
             }

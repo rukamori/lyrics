@@ -10,28 +10,15 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class RichSyncBody(
-    val richsync: RichSyncData,
-)
-
-@Serializable
-data class RichSyncData(
-    @SerialName("richsync_id")
-    val richsyncId: Long? = null,
-    @SerialName("richsync_body")
-    val richsyncBody: String = "",
-)
-
-@Serializable
 data class RichSyncLine(
-    val ts: Double,
-    val te: Double,
-    val l: List<RichSyncWord> = emptyList(),
-    val x: String? = null,
+    @SerialName("ts") val startTime: Double = 0.0,
+    @SerialName("te") val endTime: Double = 0.0,
+    @SerialName("l") val words: List<RichSyncWord> = emptyList(),
+    @SerialName("x") val text: String? = null,
 )
 
 @Serializable
 data class RichSyncWord(
-    val c: String,
-    val o: Double,
+    @SerialName("c") val text: String = "",
+    @SerialName("o") val offset: Double = 0.0,
 )

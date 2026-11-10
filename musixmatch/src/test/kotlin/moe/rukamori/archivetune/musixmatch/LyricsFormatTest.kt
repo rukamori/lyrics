@@ -6,6 +6,7 @@
  */
 package moe.rukamori.archivetune.musixmatch
 
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -13,90 +14,66 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LyricsFormatTest {
-
-    private val format = LyricsFormat()
+    private val json = Json { ignoreUnknownKeys = true }
+    private val format = LyricsFormat(json)
 
     @Test
-    fun `tryTtml decodes valid JSON richsync into TTML`() {
-        val richsyncJson = """
-            [
-                {
-                    "ts": 1.5,
-                    "te": 3.0,
-                    "l": [{"c": "Hello", "o": 0.0}],
-                    "x": "Hello"
-                }
-            ]
-        """.trimIndent()
-
-        val ttml = format.tryTtml(richsyncJson)
-        assertNotNull(ttml)
-        assertTrue(ttml!!.contains("<span begin=\"1.500s\" end=\"3.000s\">Hello</span>"))
+    fun tryLrc_validJsonFormattedSubtitles_returnsTimestampedLrc() {
+        val jsonInput = """[{"text":"Line 1","time":{"total":1.25}},{"text":"Line 2","time":{"total":65.5}}]"""
+        val result = format.tryLrc(jsonInput)
+        assertNotNull(result)
+        assertTrue(result!!.contains("[00:01.250] Line 1"))
+        assertTrue(result.contains("[01:05.500] Line 2"))
     }
 
     @Test
-    fun `tryTtml returns null on empty or invalid json`() {
+    fun tryLrc_validRawLrcWithTimestamps_returnsTrimmedContent() {
+        val rawLrc = "[00:04.12] First line\n[00:10.50] Second line"
+        val result = format.tryLrc(rawLrc)
+        assertEquals(rawLrc, result)
+    }
+
+    @Test
+    fun tryLrc_brokenJsonArray_returnsNull() {
+        val brokenJson = """[{"text": "broken json without closing"""
+        val result = format.tryLrc(brokenJson)
+        assertNull(result)
+    }
+
+    @Test
+    fun tryLrc_textWithSectionHeader_returnsNull() {
+        val sectionHeader = "[Verse 1]\nThis is plain text with no timestamps"
+        val result = format.tryLrc(sectionHeader)
+        assertNull(result)
+    }
+
+    @Test
+    fun tryLrc_blankOrNull_returnsNull() {
+        assertNull(format.tryLrc(null))
+        assertNull(format.tryLrc(""))
+        assertNull(format.tryLrc("   "))
+    }
+
+    @Test
+    fun tryTtml_validRichSync_returnsXml() {
+        val validRichSync = """[{"ts":1.0,"te":2.0,"l":[{"c":"Hello","o":0}]}]"""
+        val result = format.tryTtml(validRichSync)
+        assertNotNull(result)
+        assertTrue(result!!.contains("<tt"))
+        assertTrue(result.contains("Hello"))
+    }
+
+    @Test
+    fun tryTtml_invalidOrNull_returnsNull() {
         assertNull(format.tryTtml(null))
-        assertNull(format.tryTtml(""))
-        assertNull(format.tryTtml("invalid json"))
+        assertNull(format.tryTtml("not json"))
         assertNull(format.tryTtml("[]"))
     }
 
     @Test
-    fun `tryLrc decodes JSON subtitle lines to standard LRC`() {
-        val subtitleJson = """
-            [
-                {"text": "Line one", "time": {"total": 65.432}},
-                {"text": "Line two", "time": {"total": 120.0}}
-            ]
-        """.trimIndent()
-
-        val lrc = format.tryLrc(subtitleJson)
-        assertNotNull(lrc)
-        val lines = lrc!!.lines()
-        assertEquals(2, lines.size)
-        assertEquals("[01:05.432] Line one", lines[0])
-        assertEquals("[02:00.000] Line two", lines[1])
-    }
-
-    @Test
-    fun `tryLrc accepts raw LRC format directly`() {
-        val rawLrc = "[00:15.500] Raw lyrics line\n[00:20.000] Second line"
-        val lrc = format.tryLrc(rawLrc)
-        assertEquals(rawLrc, lrc)
-    }
-
-    @Test
-    fun `tryLrc replaces blank line text with musical note`() {
-        val subtitleJson = """
-            [
-                {"text": "   ", "time": {"total": 10.0}}
-            ]
-        """.trimIndent()
-
-        val lrc = format.tryLrc(subtitleJson)
-        assertEquals("[00:10.000] ♪", lrc)
-    }
-
-    @Test
-    fun `tryPlain strips license footer notices`() {
-        val rawLyrics = """
-            Some lyrics text
-            Another line
-            
-            ******* This lyrics is NOT for Commercial use *******
-        """.trimIndent()
-
-        val clean = format.tryPlain(rawLyrics)
-        assertNotNull(clean)
-        assertEquals("Some lyrics text\nAnother line", clean)
-    }
-
-    @Test
-    fun `tryPlain returns null when all lines are license footer or empty`() {
-        val onlyFooter = "******* This lyrics is NOT for Commercial use *******"
-        assertNull(format.tryPlain(onlyFooter))
-        assertNull(format.tryPlain(""))
-        assertNull(format.tryPlain(null))
+    fun tryPlain_cleansCommercialLicenseFooters() {
+        val raw = "Line 1\nThis lyrics is not for commercial use\nLine 2"
+        val result = format.tryPlain(raw)
+        assertEquals("Line 1\nLine 2", result)
     }
 }

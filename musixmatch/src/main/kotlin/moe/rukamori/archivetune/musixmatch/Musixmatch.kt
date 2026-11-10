@@ -14,30 +14,42 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
-import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.Json
-import moe.rukamori.archivetune.musixmatch.models.MacroBody
+import moe.rukamori.archivetune.musixmatch.models.ApiResponse
+import moe.rukamori.archivetune.musixmatch.models.LyricsBody
 import moe.rukamori.archivetune.musixmatch.models.MacroCalls
-import moe.rukamori.archivetune.musixmatch.models.MusixmatchResponse
+import moe.rukamori.archivetune.musixmatch.models.MacroResponseBody
+import moe.rukamori.archivetune.musixmatch.models.MatcherBody
 import moe.rukamori.archivetune.musixmatch.models.RichSyncBody
+import moe.rukamori.archivetune.musixmatch.models.SearchBody
 import moe.rukamori.archivetune.musixmatch.models.SubtitleBody
+import moe.rukamori.archivetune.musixmatch.models.SubtitlesBody
+import moe.rukamori.archivetune.musixmatch.models.TokenBody
 import moe.rukamori.archivetune.musixmatch.models.Track
-import moe.rukamori.archivetune.musixmatch.models.TrackSearchBody
-import moe.rukamori.archivetune.musixmatch.models.UserTokenBody
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import moe.rukamori.archivetune.musixmatch.models.bodyAs
+import kotlin.math.abs
 
 object Musixmatch {
-    internal const val BASE_URL = "https://apic-appmobile.musixmatch.com/ws/1.1/"
-    internal const val APP_ID = "mac-ios-v2.0"
-    internal const val SEARCH_PAGE_SIZE = 20
+    private const val SEARCH_PAGE_SIZE = 20
+    private const val SEARCH_MAX_CANDIDATES = 4
+    private const val SEARCH_CONCURRENCY = 2
 
     private val jsonFormat by lazy {
         Json {
@@ -101,10 +113,10 @@ object Musixmatch {
         }
     }
 
-    internal suspend fun renewToken(previous: String? = null): String =
+    internal suspend fun renewToken(previous: String): String =
         tokenMutex.withLock {
             val current = cachedToken
-            if (current != null && previous != null && current != previous) {
+            if (current != null && current != previous) {
                 current
             } else {
                 fetchToken().also { cachedToken = it }
@@ -113,85 +125,47 @@ object Musixmatch {
 
     private suspend fun fetchToken(): String {
         logger?.invoke("Musixmatch token request started")
-        val response = client.get("${BASE_URL}token.get") {
-            parameter("app_id", APP_ID)
-        }
-
+        val response = client.get("${BASE_URL}token.get") { parameter("app_id", APP_ID) }
         if (response.status == HttpStatusCode.Unauthorized || response.status == HttpStatusCode.TooManyRequests) {
             throw MusixmatchError.RateLimited("HTTP ${response.status.value} on token.get")
         }
-        if (response.status.value >= 500) {
-            throw MusixmatchError.ServerError(response.status.value)
-        }
-        if (!response.status.isSuccess()) {
-            throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on token.get")
-        }
+        if (response.status.value >= 500) throw MusixmatchError.ServerError(response.status.value)
+        if (!response.status.isSuccess()) throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on token.get")
 
         val bodyText = response.bodyAsText()
-        val apiResponse = runCatching {
-            jsonFormat.decodeFromString<MusixmatchResponse<UserTokenBody>>(bodyText)
-        }.getOrElse {
-            throw MusixmatchError.MalformedResponse("Failed to parse token response", it)
-        }
+        val apiResponse = runCatching { jsonFormat.decodeFromString<ApiResponse<TokenBody>>(bodyText) }
+            .getOrElse { throw MusixmatchError.MalformedResponse("Failed to parse token response") }
+        val statusCode = apiResponse.message?.header?.statusCode ?: 0
+        if (statusCode == 401 || statusCode == 429) throw MusixmatchError.RateLimited("Status code $statusCode on token.get")
+        if (statusCode >= 500) throw MusixmatchError.ServerError(statusCode)
+        if (statusCode != 200) throw MusixmatchError.MalformedResponse("Status code $statusCode on token.get")
 
-        val statusCode = apiResponse.message.header.statusCode
-        if (statusCode == 401 || statusCode == 429) {
-            throw MusixmatchError.RateLimited("Status code $statusCode on token.get")
-        }
-        if (statusCode >= 500) {
-            throw MusixmatchError.ServerError(statusCode)
-        }
-        if (statusCode != 200) {
-            throw MusixmatchError.MalformedResponse("Status code $statusCode on token.get")
-        }
-
-        val token = apiResponse.message.body?.userToken
+        val token = apiResponse.message?.body?.userToken
         if (token.isNullOrBlank() || token.all { it == '0' } || token.startsWith("UpgradeOnly")) {
             throw MusixmatchError.TokenInvalid("Token missing or blacklisted")
         }
-
         logger?.invoke("Musixmatch token acquired successfully")
         return token
     }
 
-    internal suspend inline fun <reified T> decodeApiResponse(
-        response: HttpResponse,
-        operation: String,
-    ): T {
-        if (response.status == HttpStatusCode.Unauthorized) {
-            throw MusixmatchError.TokenInvalid("HTTP 401 on $operation")
+    internal suspend fun executeTrackSearch(
+        title: String, artist: String, token: String, pathLabel: String,
+    ): SearchBody {
+        logger?.invoke("Musixmatch $pathLabel: track search request started")
+        val response = client.get("${BASE_URL}track.search") {
+            parameter("q_track", title)
+            parameter("q_artist", artist)
+            parameter("page_size", SEARCH_PAGE_SIZE)
+            parameter("f_has_lyrics", 1)
+            parameter("app_id", APP_ID)
+            parameter("usertoken", token)
         }
-        if (response.status == HttpStatusCode.TooManyRequests) {
-            throw MusixmatchError.RateLimited("HTTP 429 on $operation")
-        }
-        if (response.status.value >= 500) {
-            throw MusixmatchError.ServerError(response.status.value)
-        }
-        if (!response.status.isSuccess()) {
-            throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on $operation")
-        }
-
-        val bodyText = response.bodyAsText()
-        val apiResponse = runCatching {
-            jsonFormat.decodeFromString<MusixmatchResponse<T>>(bodyText)
-        }.getOrElse {
-            throw MusixmatchError.MalformedResponse("Failed to parse $operation response", it)
-        }
-
-        val statusCode = apiResponse.message.header.statusCode
-        if (statusCode == 401) throw MusixmatchError.TokenInvalid("Status code 401 on $operation")
-        if (statusCode == 429) throw MusixmatchError.RateLimited("Status code 429 on $operation")
-        if (statusCode >= 500) throw MusixmatchError.ServerError(statusCode)
-        if (statusCode != 200) throw MusixmatchError.MalformedResponse("Status code $statusCode on $operation")
-
-        return apiResponse.message.body ?: throw MusixmatchError.MalformedResponse("Empty $operation body")
+        return decodeApiResponse(response, jsonFormat, "search")
     }
 
     internal suspend fun executeMacro(
-        target: MacroTarget,
-        token: String,
-        contextLabel: String = "playback",
-    ): MacroBody {
+        target: MacroTarget, token: String, contextLabel: String,
+    ): MacroResponseBody {
         when (target) {
             is MacroTarget.ByName -> logger?.invoke("Musixmatch $contextLabel: macro request started (by-name)")
             is MacroTarget.ById -> logger?.invoke("Musixmatch $contextLabel: macro by-id request started")
@@ -209,149 +183,99 @@ object Musixmatch {
                 is MacroTarget.ByName -> {
                     parameter("q_track", target.title)
                     parameter("q_artist", target.artist)
-                    if (!target.album.isNullOrBlank()) {
-                        parameter("q_album", target.album)
-                    }
+                    if (!target.album.isNullOrBlank()) parameter("q_album", target.album)
                     if (target.durationSeconds > 0) {
                         parameter("q_duration", target.durationSeconds)
                         parameter("f_subtitle_length", target.durationSeconds)
                     }
                 }
-                is MacroTarget.ById -> {
-                    parameter("track_id", target.trackId)
-                    if (target.durationSeconds > 0) {
-                        parameter("f_subtitle_length", target.durationSeconds)
-                    }
-                }
+                is MacroTarget.ById -> parameter("track_id", target.trackId)
             }
         }
-
-        return decodeApiResponse(response, "macro.subtitles.get")
+        return decodeApiResponse(response, jsonFormat, "macro")
     }
 
-    internal suspend fun fetchRichSyncSeparately(
-        commontrackId: Long,
-        durationSeconds: Int,
-        token: String,
-        contextLabel: String = "playback",
-    ): String? {
-        if (commontrackId <= 0) return null
-        return try {
-            logger?.invoke("Musixmatch $contextLabel: separate richsync request started")
-            val response = client.get("${BASE_URL}track.richsync.get") {
-                parameter("format", "json")
-                parameter("subtitle_format", "mxm")
-                parameter("app_id", APP_ID)
-                parameter("richsync_compact_type", "words")
-                parameter("commontrack_id", commontrackId)
-                if (durationSeconds > 0) {
-                    parameter("f_subtitle_length", durationSeconds)
-                    parameter("q_duration", durationSeconds)
-                }
-                parameter("usertoken", token)
-            }
-            if (response.status == HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on richsync")
-            if (response.status == HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on richsync")
-            if (!response.status.isSuccess()) return null
-
-            val body = jsonFormat.decodeFromString<MusixmatchResponse<RichSyncBody>>(response.bodyAsText())
-            val status = body.message.header.statusCode
-            if (status == 401) throw MusixmatchError.TokenInvalid("Status code 401 on richsync")
-            if (status == 429) throw MusixmatchError.RateLimited("Status code 429 on richsync")
-            if (status != 200) return null
-            body.message.body?.richsync?.richsyncBody
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: MusixmatchError.TokenInvalid) {
-            throw e
-        } catch (e: MusixmatchError.RateLimited) {
-            throw e
-        } catch (e: Exception) {
-            null
+    internal fun matchedTrack(calls: MacroCalls?, expectedTrackId: Long? = null): Track {
+        val matcherCall = calls?.matcherTrackGet
+        val status = matcherCall?.message?.header?.statusCode ?: 0
+        if (status != 200) throw MusixmatchError.NoMatch("Matcher status code is $status")
+        val track = matcherCall.bodyAs<MatcherBody>(jsonFormat)?.track
+            ?: throw MusixmatchError.NoMatch("No track matched")
+        if (expectedTrackId != null && track.trackId != expectedTrackId) {
+            throw MusixmatchError.Mismatch("Matcher track ID differs from requested ID")
         }
+        return track
     }
-
-    internal suspend fun fetchSubtitleSeparately(
-        trackId: Long,
-        token: String,
-        contextLabel: String = "playback",
-    ): String? {
-        if (trackId <= 0) return null
-        return try {
-            logger?.invoke("Musixmatch $contextLabel: separate subtitle request started")
-            val response = client.get("${BASE_URL}track.subtitle.get") {
-                parameter("format", "json")
-                parameter("subtitle_format", "lrc")
-                parameter("app_id", APP_ID)
-                parameter("track_id", trackId)
-                parameter("usertoken", token)
-            }
-            if (response.status == HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on subtitle")
-            if (response.status == HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on subtitle")
-            if (!response.status.isSuccess()) return null
-
-            val body = jsonFormat.decodeFromString<MusixmatchResponse<SubtitleBody>>(response.bodyAsText())
-            val status = body.message.header.statusCode
-            if (status == 401) throw MusixmatchError.TokenInvalid("Status code 401 on subtitle")
-            if (status == 429) throw MusixmatchError.RateLimited("Status code 429 on subtitle")
-            if (status != 200) return null
-            body.message.body?.subtitle?.subtitleBody
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: MusixmatchError.TokenInvalid) {
-            throw e
-        } catch (e: MusixmatchError.RateLimited) {
-            throw e
-        } catch (e: Exception) {
-            null
-        }
-    }
-
 
     internal suspend fun resolveRequest(
         target: MacroTarget,
         tokenState: SearchTokenState,
-        verifyTitle: String? = null,
-        verifyArtist: String? = null,
-        verifyDuration: Int = 0,
-        expectedTrackId: Long? = null,
-        contextLabel: String = "playback",
+        contextLabel: String,
     ): ResolvedLyrics {
-        val macro = tokenState.execute { token -> executeMacro(target, token, contextLabel) }
-        val track = matchedTrack(macro.macroCalls, expectedTrackId)
+        val calls = tokenState.execute { token -> executeMacro(target, token, contextLabel) }.macroCalls
+        val track = when (target) {
+            is MacroTarget.ByName -> {
+                val matched = matchedTrack(calls)
+                validateMatch(matched, target.title, target.artist, target.durationSeconds)
+                matched
+            }
+            is MacroTarget.ById -> {
+                val matched = matchedTrack(calls, target.trackId)
+                if (target.title.isNotEmpty() || target.artist.isNotEmpty()) {
+                    validateMatch(matched, target.title, target.artist, target.durationSeconds)
+                } else if (target.durationSeconds > 0 && matched.trackLength > 0 &&
+                    abs(matched.trackLength - target.durationSeconds) > DURATION_TOLERANCE
+                ) {
+                    throw MusixmatchError.Mismatch("Matcher metadata no longer matches candidate")
+                }
+                matched
+            }
+        }
+        if (calls?.trackLyricsGet.bodyAs<LyricsBody>(jsonFormat)?.lyrics?.isRestricted == true) {
+            throw MusixmatchError.Restricted()
+        }
+        if (track.isInstrumental) throw MusixmatchError.Instrumental()
 
-        validateMatch(
-            track = track,
-            inputTitle = verifyTitle,
-            inputArtist = verifyArtist,
-            inputDuration = verifyDuration,
-        )
+        val inlineRichsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
+            calls.trackRichsyncGet.bodyAs<RichSyncBody>(jsonFormat)?.richsync?.richsyncBody
+        } else null
+        var enrichmentTerminal: MusixmatchError? = null
+        val resolveEnrichment: suspend (suspend (String) -> String?, (String?) -> String?) -> String? = { fetch, tryFormat ->
+            try {
+                tokenState.execute { token -> fetch(token) }?.let { tryFormat(it) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: MusixmatchError) {
+                if (enrichmentTerminal == null && (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited)) {
+                    enrichmentTerminal = e
+                }
+                null
+            } catch (e: Exception) {
+                null
+            }
+        }
+        val richsync = lyricsFormat.tryTtml(inlineRichsync) ?: if (track.isRichsyncAvailable) {
+            resolveEnrichment({ fetchRichSyncSeparately(client, jsonFormat, track.commonTrackId, track.trackLength, it, contextLabel, logger) }, lyricsFormat::tryTtml)
+        } else null
+        richsync?.let { return ResolvedLyrics(it, 2, terminalError = enrichmentTerminal) }
 
-        if (track.restricted == 1) throw MusixmatchError.Restricted()
-        if (track.instrumental == 1) throw MusixmatchError.Instrumental()
+        val inlineSubtitle = if (calls?.trackSubtitlesGet?.message?.header?.statusCode == 200) {
+            calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
+                ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
+        } else null
+        val subtitle = lyricsFormat.tryLrc(inlineSubtitle) ?: if (enrichmentTerminal == null && track.isSubtitlesAvailable) {
+            resolveEnrichment({ fetchSubtitleSeparately(client, jsonFormat, track.trackId, track.trackLength, it, contextLabel, logger) }, lyricsFormat::tryLrc)
+        } else null
+        subtitle?.let { return ResolvedLyrics(it, 1, terminalError = enrichmentTerminal) }
 
-        return resolveTier(
-            quality = 2,
-            inlineBody = macro.macroCalls.richsync?.message?.body?.richsync?.richsyncBody,
-            hasStandalone = track.hasRichsync == 1,
-            convert = lyricsFormat::tryTtml,
-            fetchStandalone = {
-                val commonId = track.commontrackId ?: track.trackId
-                tokenState.execute { token -> fetchRichSyncSeparately(commonId, track.trackLength, token, contextLabel) }
-            },
-        ) ?: resolveTier(
-            quality = 1,
-            inlineBody = macro.macroCalls.subtitles?.message?.body?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody,
-            hasStandalone = track.hasSubtitles == 1,
-            convert = lyricsFormat::tryLrc,
-            fetchStandalone = {
-                tokenState.execute { token -> fetchSubtitleSeparately(track.trackId, token, contextLabel) }
-            },
-        ) ?: resolveTier(
-            quality = 0,
-            inlineBody = macro.macroCalls.lyrics?.message?.body?.lyrics?.lyricsBody,
-            convert = lyricsFormat::tryPlain,
-        ) ?: throw MusixmatchError.NoMatch("No usable lyrics found in any format")
+        val plain = calls?.trackLyricsGet
+            ?.takeIf { it.message.header.statusCode == 200 }
+            .bodyAs<LyricsBody>(jsonFormat)
+            ?.lyrics?.lyricsBody
+        lyricsFormat.tryPlain(plain)?.let { return ResolvedLyrics(it, 0, terminalError = enrichmentTerminal) }
+
+        if (enrichmentTerminal != null) throw enrichmentTerminal
+        throw MusixmatchError.NoMatch("No lyrics found in any format")
     }
 
     suspend fun getLyrics(
@@ -359,116 +283,44 @@ object Musixmatch {
         artist: String,
         album: String? = null,
         durationSeconds: Int = -1,
-    ): Result<String> = runCatching {
+    ): Result<String> {
         val cleanTitle = title.trim()
         val cleanArtist = artist.trim()
         val cleanAlbum = album?.trim().orEmpty()
-
-        if (cleanTitle.isEmpty() || cleanArtist.isEmpty()) {
-            throw MusixmatchError.NoMatch("Title and artist must not be empty")
+        if (cleanTitle.isBlank() || cleanArtist.isBlank()) {
+            return Result.failure(IllegalArgumentException("Song title and artist are required"))
         }
-
-        val duration = durationSeconds.coerceAtLeast(0)
-        val tokenState = SearchTokenState(getToken()) { renewToken() }
-
-        // 1. Primary Matcher by-name
-        try {
-            val resolved = resolveRequest(
-                target = MacroTarget.ByName(cleanTitle, cleanArtist, cleanAlbum, duration),
-                tokenState = tokenState,
-                verifyTitle = cleanTitle,
-                verifyArtist = cleanArtist,
-                verifyDuration = duration,
-                contextLabel = "playback",
-            )
-            logger?.invoke("Musixmatch playback: success quality=${resolved.quality}")
-            return@runCatching resolved.lyrics
+        return try {
+            val tokenState = SearchTokenState(searchRequest { getToken() }, ::renewToken)
+            val lyrics = try {
+                try {
+                    val res = resolveRequest(
+                        MacroTarget.ByName(cleanTitle, cleanArtist, cleanAlbum, durationSeconds),
+                        tokenState,
+                        "playback",
+                    )
+                    if (res.terminalError != null) throw res.terminalError
+                    logger?.invoke("Musixmatch playback: success quality=${res.quality}")
+                    res.lyrics
+                } catch (e: MusixmatchError.Instrumental) {
+                    logger?.invoke("Musixmatch playback: instrumental")
+                    "♪ Instrumental ♪"
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger?.invoke("Musixmatch playback: failed (${errorLabel(e)})")
+                if (e is MusixmatchError.NoMatch || e is MusixmatchError.Mismatch) {
+                    resolveSearchFallback(tokenState, cleanTitle, cleanArtist, durationSeconds)
+                } else {
+                    throw e
+                }
+            }
+            Result.success(lyrics)
         } catch (e: CancellationException) {
             throw e
-        } catch (e: MusixmatchError.Instrumental) {
-            logger?.invoke("Musixmatch playback: instrumental")
-            return@runCatching "♪ Instrumental ♪"
-        } catch (e: MusixmatchError.NoMatch) {
-            logger?.invoke("Musixmatch playback: failed (${errorLabel(e)})")
-        } catch (e: MusixmatchError.Mismatch) {
-            logger?.invoke("Musixmatch playback: failed (${errorLabel(e)})")
         } catch (e: Exception) {
-            logger?.invoke("Musixmatch playback: failed (${errorLabel(e)})")
-            throw e
-        }
-
-        // 2. Fallback Search directly in getLyrics
-        logger?.invoke("Musixmatch fallback: ranked search")
-        val searchBody = tokenState.execute { token -> executeTrackSearch(cleanTitle, cleanArtist, token, "fallback") }
-        val candidates = selectSearchCandidates(
-            body = searchBody,
-            inputTitle = cleanTitle,
-            durationSeconds = duration,
-            limit = SEARCH_FALLBACK_MAX_ATTEMPTS,
-        )
-        logSearchFunnel("fallback", searchBody, duration, candidates.size)
-        if (candidates.isEmpty()) throw MusixmatchError.NoMatch("No search candidates matched")
-
-        coroutineScope {
-            val outcomes = candidates.mapIndexed { index, candidate ->
-                val rank = index + 1
-                val contextLabel = "fallback ranked $rank"
-                async {
-                    try {
-                        val resolved = resolveRequest(
-                            target = MacroTarget.ById(candidate.track.trackId, duration),
-                            tokenState = tokenState,
-                            verifyTitle = cleanTitle,
-                            verifyArtist = cleanArtist,
-                            verifyDuration = duration,
-                            expectedTrackId = candidate.track.trackId,
-                            contextLabel = contextLabel,
-                        )
-                        logger?.invoke("Musixmatch $contextLabel: success demerit=${candidate.demerit} quality=${resolved.quality} rating=${candidate.track.trackRating}")
-                        CandidateOutcome.Success(candidate, resolved)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: MusixmatchError.Instrumental) {
-                        logger?.invoke("Musixmatch $contextLabel: instrumental")
-                        CandidateOutcome.LocalFailure(candidate, e)
-                    } catch (e: MusixmatchError.TokenInvalid) {
-                        logger?.invoke("Musixmatch $contextLabel: failed (${errorLabel(e)})")
-                        CandidateOutcome.Terminal(candidate, e)
-                    } catch (e: MusixmatchError.RateLimited) {
-                        logger?.invoke("Musixmatch $contextLabel: failed (${errorLabel(e)})")
-                        CandidateOutcome.Terminal(candidate, e)
-                    } catch (e: Exception) {
-                        logger?.invoke("Musixmatch $contextLabel: failed (${errorLabel(e)})")
-                        CandidateOutcome.LocalFailure(candidate, e)
-                    }
-                }
-            }.awaitAll()
-
-            val successes = outcomes.filterIsInstance<CandidateOutcome.Success>()
-            if (successes.isNotEmpty()) {
-                val winner = successes.minWith(
-                    compareBy<CandidateOutcome.Success> { it.candidate.demerit }
-                        .thenByDescending { it.resolved.quality }
-                        .thenByDescending { it.candidate.track.trackRating }
-                )
-                val winnerRank = candidates.indexOfFirst { it.track.trackId == winner.candidate.track.trackId } + 1
-                logger?.invoke("Musixmatch fallback: winner from ranked $winnerRank")
-                return@coroutineScope winner.resolved.lyrics
-            }
-
-            // Error adjudication if no successes
-            val terminal = outcomes.filterIsInstance<CandidateOutcome.Terminal>().firstOrNull()
-            if (terminal != null) {
-                val terminalRank = candidates.indexOfFirst { it.track.trackId == terminal.candidate.track.trackId } + 1
-                logger?.invoke("Musixmatch fallback: final terminal (${errorLabel(terminal.error)}) from ranked $terminalRank")
-                throw terminal.error
-            }
-
-            val firstFailure = outcomes.filterIsInstance<CandidateOutcome.LocalFailure>().firstOrNull()
-            val failedRank = firstFailure?.let { candidates.indexOfFirst { c -> c.track.trackId == it.candidate.track.trackId } + 1 } ?: 1
-            val errorToThrow = firstFailure?.error ?: MusixmatchError.NoMatch("Search candidates produced no usable lyrics")
-            logger?.invoke("Musixmatch fallback: all candidates failed (${errorLabel(errorToThrow)}) from ranked $failedRank")
-            throw errorToThrow
+            Result.failure(e)
         }
     }
 
@@ -478,5 +330,107 @@ object Musixmatch {
         album: String? = null,
         durationSeconds: Int = -1,
         callback: (String) -> Unit,
-    ) = executeSearchGetAllLyrics(title, artist, album, durationSeconds, callback)
+    ) {
+        val cleanTitle = title.trim()
+        val cleanArtist = artist.trim()
+        if (cleanTitle.isBlank() || cleanArtist.isBlank()) return
+
+        val tokenState = SearchTokenState(searchRequest { getToken() }, ::renewToken)
+        val searchBody = tokenState.execute { token ->
+            executeTrackSearch(cleanTitle, cleanArtist, token, "fan-out")
+        }
+        val candidates = selectSearchCandidates(searchBody, cleanTitle, durationSeconds, SEARCH_MAX_CANDIDATES)
+        logSearchFunnel("fan-out", searchBody, durationSeconds, candidates.size)
+
+        if (candidates.isEmpty()) {
+            val lyrics = try {
+                logger?.invoke("Musixmatch title-fallback: title matcher")
+                val res = resolveRequest(
+                    MacroTarget.ByName(cleanTitle, cleanArtist, album?.trim().orEmpty(), durationSeconds),
+                    tokenState,
+                    "title-fallback",
+                )
+                if (res.terminalError != null) throw res.terminalError
+                logger?.invoke("Musixmatch title-fallback: success quality=${res.quality}")
+                res.lyrics
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: MusixmatchError.Instrumental) {
+                logger?.invoke("Musixmatch title-fallback: instrumental")
+                null
+            } catch (e: MusixmatchError) {
+                logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
+                if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) throw e
+                null
+            }
+            if (lyrics != null) {
+                currentCoroutineContext().ensureActive()
+                callback(lyrics)
+            }
+            return
+        }
+
+        val startedCount = AtomicInteger(0)
+        val queueStopped = AtomicBoolean(false)
+        val terminalErrors = ConcurrentLinkedQueue<Pair<Int, MusixmatchError>>()
+        val recordTerminal = { rank: Int, error: MusixmatchError ->
+            terminalErrors.add(rank to error)
+            if (startedCount.get() < candidates.size && queueStopped.compareAndSet(false, true)) {
+                logger?.invoke("Musixmatch fan-out: queue stopped — terminal (${errorLabel(error)}) at ranked $rank")
+            }
+        }
+        val semaphore = Semaphore(SEARCH_CONCURRENCY)
+        val callbackMutex = Mutex()
+        coroutineScope {
+            val searchScope = this
+            val jobs = candidates.mapIndexed { index, candidate ->
+                launch {
+                    val rank = index + 1
+                    if (terminalErrors.isNotEmpty() || tokenState.isRenewalFailed) return@launch
+
+                    val lyrics = semaphore.withPermit {
+                        currentCoroutineContext().ensureActive()
+                        if (terminalErrors.isNotEmpty() || tokenState.isRenewalFailed) return@withPermit null
+                        startedCount.incrementAndGet()
+                        try {
+                            val res = resolveRequest(
+                                MacroTarget.ById(candidate.track.trackId, durationSeconds = durationSeconds),
+                                tokenState,
+                                "fan-out ranked $rank",
+                            )
+                            logger?.invoke("Musixmatch fan-out ranked $rank: success demerit=${candidate.demerit} quality=${res.quality} rating=${candidate.track.trackRating}")
+                            if (res.terminalError != null) recordTerminal(rank, res.terminalError)
+                            res.lyrics
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: MusixmatchError.Instrumental) {
+                            logger?.invoke("Musixmatch fan-out ranked $rank: instrumental")
+                            null
+                        } catch (e: Exception) {
+                            logger?.invoke("Musixmatch fan-out ranked $rank: failed (${errorLabel(e)})")
+                            if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) recordTerminal(rank, e)
+                            null
+                        }
+                    }
+                    if (lyrics != null) {
+                        callbackMutex.withLock {
+                            try {
+                                callback(lyrics)
+                            } catch (e: CancellationException) {
+                                searchScope.cancel(e)
+                                throw e
+                            }
+                        }
+                    }
+                }
+            }
+            jobs.joinAll()
+        }
+
+        val bestTerminal = terminalErrors.minByOrNull { it.first }
+        if (bestTerminal != null) {
+            logger?.invoke("Musixmatch fan-out: final terminal (${errorLabel(bestTerminal.second)}) from ranked ${bestTerminal.first}")
+            throw bestTerminal.second
+        }
+    }
 }

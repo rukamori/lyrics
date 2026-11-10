@@ -6,88 +6,82 @@
  */
 package moe.rukamori.archivetune.musixmatch
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/**
- * Manages token lifecycle for a single high-level operation (playback or search).
- *
- * Enforces:
- * - At most 1 token renewal per operation.
- * - Thread-safe token access and concurrent renewal sharing via Mutex.
- * - Terminal failure poisoning (e.g., RateLimited halts subsequent attempts without network calls).
- */
-internal class SearchTokenState(
-    initialToken: String,
-    private val renewToken: suspend () -> String,
-) {
-    @Volatile
-    private var token: String = initialToken
-
-    @Volatile
-    var terminalFailure: MusixmatchError? = null
-        private set
-
-    private var renewalUsed: Boolean = false
-    private val renewalMutex = Mutex()
-
-    fun current(): String = token
-
-    suspend fun <T> execute(block: suspend (token: String) -> T): T {
-        terminalFailure?.let { throw it }
-
-        val activeToken = token
-        return try {
-            block(activeToken)
-        } catch (e: MusixmatchError.TokenInvalid) {
-            handleTokenInvalid(activeToken, e, block)
-        } catch (e: MusixmatchError.RateLimited) {
-            terminalFailure = e
-            throw e
-        }
+internal suspend fun <T> searchRequest(block: suspend () -> T): T =
+    try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: MusixmatchError) {
+        throw e
+    } catch (e: Exception) {
+        throw MusixmatchError.MalformedResponse("Search request failed")
     }
 
-    private suspend fun <T> handleTokenInvalid(
-        failedToken: String,
-        originalError: MusixmatchError.TokenInvalid,
-        block: suspend (token: String) -> T,
-    ): T {
-        renewalMutex.withLock {
-            terminalFailure?.let { throw it }
+internal class SearchTokenState(
+    initialToken: String,
+    private val renewToken: suspend (String) -> String,
+) {
+    @Volatile
+    private var token = initialToken
 
-            // If another concurrent request already renewed the token, reuse it
-            if (token != failedToken) {
-                return block(token)
-            }
+    @Volatile
+    private var terminalFailure: MusixmatchError? = null
 
-            if (renewalUsed) {
-                terminalFailure = originalError
-                throw originalError
-            }
+    @Volatile
+    private var renewalFailed = false
 
-            val newToken = try {
-                renewToken()
-            } catch (e: MusixmatchError.RateLimited) {
-                terminalFailure = e
-                throw e
-            } catch (e: Exception) {
-                val error = MusixmatchError.TokenInvalid("Failed to renew token", e)
-                terminalFailure = error
-                throw error
-            }
+    val isRenewalFailed: Boolean get() = renewalFailed
 
-            token = newToken
-            renewalUsed = true
-        }
+    private val renewalMutex = Mutex()
+    private var renewalUsed = false
 
-        return try {
-            block(token)
-        } catch (e: MusixmatchError.TokenInvalid) {
-            terminalFailure = e
-            throw e
+    suspend fun <T> execute(block: suspend (String) -> T): T {
+        terminalFailure?.let { throw it }
+        val previous = token
+        try {
+            return searchRequest { block(previous) }
         } catch (e: MusixmatchError.RateLimited) {
             terminalFailure = e
             throw e
+        } catch (e: MusixmatchError.TokenInvalid) {
+            val retryToken = renewalMutex.withLock {
+                terminalFailure?.let { throw it }
+                if (token != previous) {
+                    token
+                } else {
+                    if (renewalUsed) {
+                        throw e
+                    }
+                    renewalUsed = true
+                    try {
+                        token = searchRequest { renewToken(previous) }
+                    } catch (failure: CancellationException) {
+                        throw failure
+                    } catch (failure: Exception) {
+                        renewalFailed = true
+                        if (failure is MusixmatchError.RateLimited) {
+                            terminalFailure = failure
+                            throw failure
+                        }
+                        throw MusixmatchError.TokenInvalid("Search token renewal failed", failure)
+                    }
+                    token
+                }
+            }
+            terminalFailure?.let { throw it }
+            return try {
+                searchRequest { block(retryToken) }
+            } catch (failure: MusixmatchError.TokenInvalid) {
+                terminalFailure = failure
+                throw failure
+            } catch (failure: MusixmatchError.RateLimited) {
+                terminalFailure = failure
+                throw failure
+            }
         }
     }
 }

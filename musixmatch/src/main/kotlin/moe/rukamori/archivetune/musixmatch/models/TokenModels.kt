@@ -10,7 +10,6 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class UserTokenBody(
-    @SerialName("user_token")
-    val userToken: String,
+data class TokenBody(
+    @SerialName("user_token") val userToken: String? = null,
 )
