@@ -10,6 +10,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class UnisonSubmitter(
+    val keyId: String? = null,
     val displayName: String? = null,
 )
 
@@ -41,9 +42,11 @@ data class UnisonListResponse(
 
 data class UnisonLyrics(
     val id: Long,
+    val videoId: String?,
     val lyrics: String,
     val format: String?,
     val syncType: String?,
+    val submitterKeyId: String?,
     val submitterName: String?,
 )
 
@@ -52,9 +55,11 @@ internal fun UnisonEntry.toLyrics(): UnisonLyrics? {
     val body = lyrics?.takeIf { it.isNotBlank() } ?: return null
     return UnisonLyrics(
         id = id,
+        videoId = videoId?.trim()?.takeIf { it.isNotEmpty() },
         lyrics = body,
         format = format,
         syncType = syncType,
+        submitterKeyId = submitter?.keyId?.trim()?.takeIf { it.isNotEmpty() },
         submitterName = submitter?.displayName?.trim()?.takeIf { it.isNotEmpty() },
     )
 }

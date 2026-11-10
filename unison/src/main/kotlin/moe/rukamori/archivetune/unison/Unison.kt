@@ -30,6 +30,7 @@ object Unison {
     private const val API_BASE_URL = "https://unison.betterlyrics.org/"
     private const val MAX_RESULTS = 5
     private val VIDEO_ID_REGEX = Regex("^[A-Za-z0-9_-]{11}$")
+    private val KEY_ID_REGEX = Regex("^[A-Za-z0-9_-]{1,128}$")
 
     private val jsonFormat by lazy {
         Json {
@@ -220,6 +221,14 @@ object Unison {
             logger?.invoke("Unison $lookup fetch error: ${e.message}")
             null
         }
+
+    fun lyricsPageUrl(lyrics: UnisonLyrics): String? =
+        lyrics.videoId.toVideoIdOrNull()?.let { videoId -> "${API_BASE_URL}song/$videoId?variantId=${lyrics.id}" }
+
+    fun submitterPageUrl(lyrics: UnisonLyrics): String? =
+        lyrics.submitterKeyId
+            ?.takeIf { KEY_ID_REGEX.matches(it) }
+            ?.let { keyId -> "${API_BASE_URL}curator/$keyId" }
 
     private fun String?.toVideoIdOrNull(): String? = this?.trim()?.takeIf { VIDEO_ID_REGEX.matches(it) }
 }
