@@ -396,14 +396,17 @@ class MusixmatchSearchConcurrencyTest {
         val entered = Channel<Int>(Channel.UNLIMITED)
         val rejectFirst = CompletableDeferred<Unit>()
         val releaseSibling = CompletableDeferred<Unit>()
+        val renewalDone = CompletableDeferred<Unit>()
         val requested = ConcurrentLinkedQueue<Int>()
         val callbacks = AtomicInteger()
         install(MockEngine { request ->
             when {
                 request.url.encodedPath.endsWith("track.search") ->
                     respond(search(1, 2, 3, 4), headers = jsonHeaders)
-                request.url.encodedPath.endsWith("token.get") ->
+                request.url.encodedPath.endsWith("token.get") -> {
+                    renewalDone.complete(Unit)
                     respond("", HttpStatusCode.ServiceUnavailable, jsonHeaders)
+                }
                 else -> {
                     val id = request.url.parameters["track_id"]!!.toInt()
                     requested.add(id)
@@ -413,6 +416,7 @@ class MusixmatchSearchConcurrencyTest {
                         respond(status(401), headers = jsonHeaders)
                     } else if (id == 2) {
                         releaseSibling.await()
+                        renewalDone.await()
                         respond(macro(id), headers = jsonHeaders)
                     } else {
                         respond(macro(id), headers = jsonHeaders)
@@ -431,7 +435,7 @@ class MusixmatchSearchConcurrencyTest {
             assertEquals(setOf(1, 2), requested.toSet())
             assertEquals(1, callbacks.get())
         } finally {
-            cleanup(operation, rejectFirst, releaseSibling)
+            cleanup(operation, rejectFirst, releaseSibling, renewalDone)
             entered.close()
         }
     }

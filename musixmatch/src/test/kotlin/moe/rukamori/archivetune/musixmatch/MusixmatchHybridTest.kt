@@ -64,7 +64,7 @@ class MusixmatchHybridTest {
     }
 
     private suspend fun playback() = Musixmatch.getLyrics("Koiiro", "Mosawo", "Album", 100)
-    private fun ids() = requests.filter { it.encodedPath.endsWith("macro.subtitles.get") }.mapNotNull { it.parameters["track_id"]?.toLongOrNull() }.sorted()
+    private fun requestedCandidateIds() = requests.filter { it.encodedPath.endsWith("macro.subtitles.get") }.mapNotNull { it.parameters["track_id"]?.toLongOrNull() }.sorted()
     private fun titles() = requests.filter { it.encodedPath.endsWith("macro.subtitles.get") && it.parameters["track_id"] == null }
     private fun searches() = requests.count { it.encodedPath.endsWith("track.search") }
 
@@ -86,7 +86,7 @@ class MusixmatchHybridTest {
         setup(tracks = listOf(track(0), track(2, length = 109), track(3, instrumental = 1)))
         assertEquals(listOf("Lyrics 1"), search())
         assertEquals(1, titles().size)
-        assertTrue(ids().isEmpty())
+        assertTrue(requestedCandidateIds().isEmpty())
     }
 
     @Test
@@ -125,7 +125,7 @@ class MusixmatchHybridTest {
         for (body in listOf(macro(matcherStatus = 404), macro(track = track(1, length = 109)))) {
             setup(tracks = listOf(track(2)), titleMacro = body)
             assertEquals("Lyrics 2", playback().getOrThrow())
-            assertEquals(listOf(2L), ids())
+            assertEquals(listOf(2L), requestedCandidateIds())
             assertEquals(1, searches())
         }
     }
@@ -134,17 +134,17 @@ class MusixmatchHybridTest {
     fun playbackAttemptsCandidatesInParallelAndPicksBest() = runBlocking {
         setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404))
         assertEquals("Lyrics 2", playback().getOrThrow())
-        assertEquals(listOf(2L, 3L), ids())
+        assertEquals(listOf(2L, 3L), requestedCandidateIds())
     }
 
     @Test
     fun playbackAttemptsAtMostTwoCandidatesInParallel() = runBlocking {
         setup(tracks = listOf(track(2), track(3), track(4)), titleMacro = macro(matcherStatus = 404), idMacros = mapOf(2L to macro(2, matcherStatus = 404)))
         assertEquals("Lyrics 3", playback().getOrThrow())
-        assertEquals(listOf(2L, 3L), ids())
+        assertEquals(listOf(2L, 3L), requestedCandidateIds())
         setup(tracks = listOf(track(2), track(3), track(4)), titleMacro = macro(matcherStatus = 404), idMacros = mapOf(2L to macro(2, matcherStatus = 404), 3L to macro(3, matcherStatus = 404)))
         assertTrue(playback().exceptionOrNull() is MusixmatchError.NoMatch)
-        assertEquals(listOf(2L, 3L), ids())
+        assertEquals(listOf(2L, 3L), requestedCandidateIds())
     }
 
     @Test
@@ -157,7 +157,7 @@ class MusixmatchHybridTest {
         )) {
             setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idMacros = mapOf(2L to body))
             assertEquals("Lyrics 3", playback().getOrThrow())
-            assertEquals(listOf(2L, 3L), ids())
+            assertEquals(listOf(2L, 3L), requestedCandidateIds())
         }
     }
 
@@ -219,7 +219,7 @@ class MusixmatchHybridTest {
         })
         Musixmatch.cachedToken = "cached_test_token"
         assertEquals("Lyrics 3", playback().getOrThrow())
-        assertEquals(listOf(2L, 3L), ids())
+        assertEquals(listOf(2L, 3L), requestedCandidateIds())
     }
 
     @Test
@@ -248,7 +248,7 @@ class MusixmatchHybridTest {
         Musixmatch.cachedToken = "cached_test_token"
         val failure = playback().exceptionOrNull()
         assertTrue(failure is MusixmatchError.RateLimited)
-        assertEquals(listOf(2L, 3L), ids())
+        assertEquals(listOf(2L, 3L), requestedCandidateIds())
     }
 
     @Test
@@ -262,7 +262,7 @@ class MusixmatchHybridTest {
     fun fallbackUnauthorizedCandidateYieldsToConcurrentSuccessfulCandidate() = runBlocking {
         setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idStatuses = mapOf(2L to 401), renewalStatus = 500)
         assertEquals("Lyrics 3", playback().getOrThrow())
-        assertEquals(listOf(2L, 3L), ids())
+        assertEquals(listOf(2L, 3L), requestedCandidateIds())
     }
 
     @Test
@@ -286,7 +286,7 @@ class MusixmatchHybridTest {
         Musixmatch.cachedToken = "cached_test_token"
         assertTrue(playback().exceptionOrNull() is MusixmatchError.TokenInvalid)
         assertEquals(1, renewals)
-        assertEquals(listOf(2L), ids())
+        assertEquals(listOf(2L), requestedCandidateIds())
     }
 
     @Test
@@ -553,7 +553,7 @@ class MusixmatchHybridTest {
         Musixmatch.cachedToken = "cached_test_token"
         val res = playback().getOrThrow()
         assertTrue(res.contains("<tt"))
-        assertEquals(listOf(2L, 3L), ids())
+        assertEquals(listOf(2L, 3L), requestedCandidateIds())
     }
 
     @Test
