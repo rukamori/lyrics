@@ -72,6 +72,26 @@ class LyricsFormatTest {
     }
 
     @Test
+    fun tryTtml_lineLevelRichSync_returnsNull() {
+        val lineLevelRichSync = """[{"ts":1.0,"te":2.0,"l":[{"c":"Hello","o":0.0}],"x":"Hello"}]"""
+        assertNull(format.tryTtml(lineLevelRichSync))
+    }
+
+    @Test
+    fun parseLrc_multipleTimestampsOnSameLine_parsesAndSortsAllTimestamps() {
+        val rawLrc = "[00:05.00][00:01.00] Repeated chorus\n[00:03.00] Middle line"
+        val parsed = format.parseLrc(rawLrc)
+        assertNotNull(parsed)
+        assertEquals(3, parsed!!.size)
+        assertEquals(1.0, parsed[0].seconds, 0.001)
+        assertEquals("Repeated chorus", parsed[0].text)
+        assertEquals(3.0, parsed[1].seconds, 0.001)
+        assertEquals("Middle line", parsed[1].text)
+        assertEquals(5.0, parsed[2].seconds, 0.001)
+        assertEquals("Repeated chorus", parsed[2].text)
+    }
+
+    @Test
     fun tryPlain_cleansCommercialLicenseFooters() {
         val raw = "Line 1\nThis lyrics is not for commercial use\nLine 2"
         val result = format.tryPlain(raw)

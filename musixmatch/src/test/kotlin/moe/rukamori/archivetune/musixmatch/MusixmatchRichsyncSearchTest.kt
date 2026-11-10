@@ -112,11 +112,22 @@ class MusixmatchRichsyncSearchTest {
     }
 
     @Test
-    fun inlineLineLevelRichsyncProducesLrcAndAvoidsStandaloneRichsync() = runBlocking {
+    fun inlineLineLevelRichsyncEquivalentLrcReturnsOfficialLrcAndAvoidsStandaloneRichsync() = runBlocking {
         val lineLevelRichsync = """{"richsync":{"richsync_body":${quote("""[{"ts":1.0,"te":3.0,"l":[{"c":"Line level","o":0.0}],"x":"Line level"}]""")}}}"""
-        setup(inline = lineLevelRichsync, subtitle = "Official LRC")
+        setup(inline = lineLevelRichsync, subtitle = "Line level")
         val searched = search().single()
         assertFalse(searched.contains("<tt"))
+        assertEquals("[00:01.000] Line level", searched)
+        assertTrue(richRequests().isEmpty())
+    }
+
+    @Test
+    fun inlineLineLevelRichsyncAbsentLrcSynthesizesLrcAndAvoidsStandaloneRichsync() = runBlocking {
+        val lineLevelRichsync = """{"richsync":{"richsync_body":${quote("""[{"ts":1.25,"te":3.0,"l":[{"c":"Line level","o":0.0}],"x":"Line level"}]""")}}}"""
+        setup(inline = lineLevelRichsync, subtitle = null)
+        val searched = search().single()
+        assertFalse(searched.contains("<tt"))
+        assertEquals("[00:01.250] Line level", searched)
         assertTrue(richRequests().isEmpty())
     }
 

@@ -44,14 +44,12 @@ internal class LyricsFormat(private val jsonFormat: Json) {
         )
 
     private val lrcTimestampRegex = Regex("""\[\d{1,2}:\d{2}([.:]\d{1,3})?\]""")
-    private val lrcLineRegex = Regex("""^\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\](.*)$""")
+    private val lrcTimestampTokenRegex = Regex("""\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]""")
 
     fun tryTtml(richSync: String?): String? {
-        if (richSync.isNullOrBlank()) return null
-        return runCatching {
-            val lines = jsonFormat.decodeFromString<List<RichSyncLine>>(richSync)
-            MusixmatchTtml.convertRichSyncToTtml(lines)
-        }.getOrNull()?.takeIf { it.isNotBlank() }
+        return formatRichSync(richSync, subtitleBody = null)
+            ?.takeIf { it.quality == 2 }
+            ?.content
     }
 
     fun tryLrc(subtitleBody: String?): String? {
@@ -105,21 +103,24 @@ internal class LyricsFormat(private val jsonFormat: Json) {
         for (raw in rawLines) {
             val line = raw.trim()
             if (line.isEmpty()) continue
-            val match = lrcLineRegex.find(line) ?: continue
-            val min = match.groupValues[1].toLong()
-            val sec = match.groupValues[2].toLong()
-            val fracStr = match.groupValues[3]
-            val ms = when (fracStr.length) {
-                0 -> 0L
-                1 -> fracStr.toLong() * 100L
-                2 -> fracStr.toLong() * 10L
-                else -> fracStr.take(3).toLong()
+            val matches = lrcTimestampTokenRegex.findAll(line).toList()
+            if (matches.isEmpty() || matches.first().range.first != 0) continue
+            val text = line.substring(matches.last().range.last + 1).trim()
+            for (match in matches) {
+                val min = match.groupValues[1].toLong()
+                val sec = match.groupValues[2].toLong()
+                val fracStr = match.groupValues[3]
+                val ms = when (fracStr.length) {
+                    0 -> 0L
+                    1 -> fracStr.toLong() * 100L
+                    2 -> fracStr.toLong() * 10L
+                    else -> fracStr.take(3).toLong()
+                }
+                val totalSec = min * 60.0 + sec + ms / 1000.0
+                parsedLines.add(ParsedLrcLine(totalSec, text))
             }
-            val totalSec = min * 60.0 + sec + ms / 1000.0
-            val text = match.groupValues[4].trim()
-            parsedLines.add(ParsedLrcLine(totalSec, text))
         }
-        return parsedLines.takeIf { it.isNotEmpty() }
+        return parsedLines.takeIf { it.isNotEmpty() }?.sortedBy { it.seconds }
     }
 
     fun compareWithLrc(lines: List<RichSyncLine>, subtitleBody: String?): LrcMatch {
