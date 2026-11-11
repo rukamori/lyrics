@@ -324,3 +324,10 @@ The suite covers token single-flight and renewal, macro guards, instrumental
 and restricted paths, richsync classification, LRC equivalence/synthesis,
 standalone richsync and subtitle fallback, candidate ranking, concurrency,
 logging redaction, and TTML round-tripping.
+
+## Attribution
+
+The Musixmatch mobile API header set and token acquisition approach are
+adapted from Spicetify CLI's `lyrics-plus` provider:
+
+https://github.com/spicetify/cli/blob/main/CustomApps/lyrics-plus/ProviderMusixmatch.js
