@@ -114,6 +114,43 @@ Returns server health stats from the Paxsenix proxy.
 
 ---
 
+## Musixmatch
+
+**File:** `musixmatch/src/main/kotlin/moe/rukamori/archivetune/musixmatch/Musixmatch.kt`
+**Object:** `Musixmatch`
+
+Direct client for `apic-appmobile.musixmatch.com`. See
+[MUSIXMATCH.md](./MUSIXMATCH.md) for the request lifecycle and format rules.
+
+### Methods
+
+#### `getLyrics(title, artist, album?, durationSeconds)`
+
+| Parameter | Type | Description |
+|---|---|---|
+| `title` | `String` | Track title |
+| `artist` | `String` | Artist name |
+| `album` | `String?` | Optional album |
+| `durationSeconds` | `Int` | Duration in seconds (`-1` to skip duration filtering) |
+
+Returns `Result<String>` — TTML when the richsync payload is genuinely
+word-synced, otherwise LRC, otherwise plain text. Matcher failures fall back
+to a ranked `track.search`.
+
+#### `getAllLyrics(title, artist, album?, durationSeconds, callback)`
+
+Searches `track.search`, selects up to 4 candidates, and invokes `callback` for
+each successful result. Candidate fetches run with concurrency 2. This method
+is not wrapped in `Result`; terminal errors are thrown after in-flight
+callbacks finish.
+
+#### `logger`
+
+Optional `(String) -> Unit` hook for operational logs. Tokens, URLs, response
+bodies, and lyrics are not logged.
+
+---
+
 ## BetterLyrics
 
 **File:** `betterlyrics/src/main/kotlin/moe/rukamori/rukamori/betterlyrics/BetterLyrics.kt`
