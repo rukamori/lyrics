@@ -106,23 +106,39 @@ The macro response can contain:
 
 ### 3. Format resolution
 
-Resolution is deliberately biased toward true word-level timing:
+Resolution is a decision tree, not a linear fallback chain. It is biased
+toward true word-level timing, so a standalone richsync request is attempted
+before inline subtitle fallback.
 
-1. If inline richsync exists, classify it.
-2. If it is word-synced, emit TTML and stop.
-3. If it is line-level, emit LRC and stop.
-4. If inline richsync is absent and `has_richsync == 1`, fetch
-   `track.richsync.get` by `commontrack_id`, then repeat the classification.
-5. If no richsync result is usable, use inline subtitle LRC.
-6. If no inline subtitle exists and `has_subtitles == 1`, fetch
-   `track.subtitle.get` by `track_id`.
-7. If no timed format exists, use `track.lyrics.get` plain text.
-8. If nothing is found, throw `NoMatch`.
+```mermaid
+flowchart TD
+    M[Macro response] --> R{Inline richsync?}
+    R -- yes --> C1[Classify inline richsync]
+    R -- no --> H{has_richsync?}
+    C1 -- word-synced --> T[TTML · quality 2]
+    C1 -- line-level with usable text --> L1[LRC · quality 1]
+    C1 -- unusable --> H
+    H -- yes --> S[Fetch track.richsync.get]
+    S --> C2[Classify standalone richsync]
+    C2 -- word-synced --> T
+    C2 -- line-level with usable text --> L1
+    C2 -- unusable --> I{Inline subtitle valid?}
+    H -- no --> I
+    I -- yes --> L2[LRC · quality 1]
+    I -- no --> U{has_subtitles?}
+    U -- yes --> D[Fetch track.subtitle.get]
+    D --> DL{Valid LRC?}
+    DL -- yes --> L3[LRC · quality 1]
+    DL -- no --> P{Plain lyrics?}
+    U -- no --> P
+    P -- yes --> PL[Plain text · quality 0]
+    P -- no --> N[NoMatch]
+```
 
-Step 4 intentionally runs before inline subtitle fallback. Inline richsync is
-often missing even when standalone richsync is available, and checking the
-inline LRC first would prevent most tracks from ever reaching standalone
-word-sync.
+Inline richsync is often missing even when standalone richsync exists. Trying
+inline LRC first would therefore prevent most tracks from ever reaching
+standalone word-sync. The subtitle branch is only reached after both inline
+and standalone richsync are unusable or unavailable.
 
 ### 4. Terminal enrichment errors
 
