@@ -7,7 +7,7 @@ body:
     id: source-name
     attributes:
       label: Lyrics Source Name
-      description: Name of the service/API (e.g. "Genius", "AZLyrics", "Musixmatch")
+      description: Name of the service/API (e.g. "Genius", "AZLyrics")
       placeholder: e.g. Genius
     validations:
       required: true

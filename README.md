@@ -38,7 +38,6 @@ This repository contains the standalone lyrics provider modules extracted from [
 | `lrclib` | LRC Lib | Fetches synced + plain lyrics from `lrclib.net`. Uses Levenshtein distance for similarity matching. |
 | `simpmusic` | SimpMusic | Fetches crowd-sourced lyrics from `api-lyrics.simpmusic.org`. Indexed by YouTube video ID. |
 | `paxsenix` | Paxsenix | Multi-backend proxy client for `lyrics.paxsenix.org`. Wraps Apple Music, NetEase, Spotify, Musixmatch, and YouTube lyrics endpoints. |
-| [`musixmatch`](docs/MUSIXMATCH.md) | Musixmatch | Direct client for Musixmatch's mobile API. Classifies richsync as word-synced TTML or line-synced LRC, with standalone enrichment and ranked search fallback. |
 | `betterlyrics` | BetterLyrics | Fetches TTML (Apple Music format) lyrics from `lyrics-api.boidu.dev`. Includes a full XML DOM-based TTML parser with word-by-word timing, CJK support, and transliteration. |
 | `unison` | Unison | Fetches community-synced lyrics from `unison.betterlyrics.org`. Looks up by video ID, then by metadata (title, artist, album, duration), and returns the submitter for attribution. |
 | `lrcred` | lrc.red | Fetches word/line-timed TTML from `lrc.red`. Searches by title+artist, matches by normalized title, artist and a 3-second duration tolerance, then downloads `/s/{isrc}.ttml`. Requests carry an identifying User-Agent as required by the lrc.red API terms. |
@@ -47,7 +46,7 @@ This repository contains the standalone lyrics provider modules extracted from [
 
 ## Features
 
-- **Ten independent providers** — each module is a separate Gradle subproject with no cross-dependencies
+- **Nine independent providers** — each module is a separate Gradle subproject with no cross-dependencies
 - **Pure JVM** — no Android SDK required, testable on any JVM
 - **Ktor Client** — built on Ktor with content negotiation and JSON serialization
 - **Kotlinx Serialization** — all API responses parsed into typed data classes
@@ -85,9 +84,6 @@ flowchart TB
             PXMX["Musixmatch"]
             PXYT["YouTube"]
         end
-        subgraph Musixmatch["musixmatch"]
-            MX["Musixmatch.kt<br/>Musixmatch mobile API"]
-        end
         subgraph Betterlyrics["betterlyrics"]
             BL["BetterLyrics.kt<br/>TTML API"]
             TTP["TTMLParser.kt<br/>XML word-by-word parser"]
@@ -111,7 +107,6 @@ flowchart TB
         EXLL["lrclib.net"]
         EXSM["api-lyrics.simpmusic.org"]
         EXPX["lyrics.paxsenix.org"]
-        EXMX["apic-appmobile.musixmatch.com"]
         EXBL["lyrics-api.boidu.dev"]
         EXUN["unison.betterlyrics.org"]
         EXLR["lrc.red"]
@@ -121,13 +116,12 @@ flowchart TB
 
     UI --> VM --> LH
     LH --> LP
-    LP --> KG & LL & SM & PX & MX & BL & UN & LR & BN & MG
+    LP --> KG & LL & SM & PX & BL & UN & LR & BN & MG
     KG --> EXKG
     LL --> EXLL
     SM --> EXSM
     PX --> EXPX
     PXAM & PXNE & PXSP & PXMX & PXYT --> PX
-    MX --> EXMX
     BL --> EXBL
     UN --> EXUN
     LR --> EXLR
@@ -155,10 +149,6 @@ moe.rukamori.archivetune/
 │   └── SimpMusicLyrics.kt   — SimpMusic lyrics client
 ├── paxsenix/                # paxsenix module
 │   └── PaxsenixLyrics.kt    — Multi-backend proxy client
-├── musixmatch/              # musixmatch module
-│   ├── Musixmatch.kt        — Musixmatch API client
-│   ├── MusixmatchSearch.kt  — Candidate ranking and fallback
-│   └── LyricsFormat.kt      — Richsync/LRC/TTML format selection
 ├── betterlyrics/            # betterlyrics module
 │   ├── BetterLyrics.kt      — BetterLyrics API client
 │   └── TTMLParser.kt        — TTML XML parser
@@ -229,27 +219,6 @@ val netease    = PaxsenixLyrics.getNeteaseLyrics(title, artist, duration)
 val spotify    = PaxsenixLyrics.getSpotifyLyrics(title, artist, duration)
 val musixmatch = PaxsenixLyrics.getMusixmatchLyrics(title, artist, duration)
 val youtube    = PaxsenixLyrics.getYouTubeLyrics(title, artist, duration)
-```
-
-### Musixmatch
-
-```kotlin
-// Playback path: matcher first, ranked track.search fallback on NoMatch/Mismatch.
-val lyrics = Musixmatch.getLyrics(
-    title = "Never Gonna Give You Up",
-    artist = "Rick Astley",
-    album = "Whenever You Need Somebody",
-    durationSeconds = 213,
-).getOrThrow()
-
-// Search path: emits candidates as callbacks as they resolve.
-Musixmatch.getAllLyrics(
-    title = "Never Gonna Give You Up",
-    artist = "Rick Astley",
-    durationSeconds = 213,
-) { candidate ->
-    println(candidate)
-}
 ```
 
 ### BetterLyrics
